@@ -2001,7 +2001,8 @@ function createCoordinatorPane(root, wsId, opts) {
       .filter((it) => it.needs_approval && it.func_name && !it.error)
       .map((it) => it.approval_label || it.func_name);
     const alwaysLabel = alwaysNames.length
-      ? "Always approve " + convShownText(alwaysNames.join(", ")).text
+      ? "Always approve " +
+        alwaysNames.map((n) => convShownText(n).text).join(", ")
       : "";
     return buildConvActions({
       kbd: { approve: "⏎", deny: "D", always: "⇧A" },

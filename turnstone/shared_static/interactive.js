@@ -3133,7 +3133,8 @@ class Pane {
       const actions = buildConvActions({
         kbd: { approve: "y", deny: "n", always: "a" },
         alwaysLabel: alwaysNames.length
-          ? "Always approve " + convShownText(alwaysNames.join(", ")).text
+          ? "Always approve " +
+            alwaysNames.map((n) => convShownText(n).text).join(", ")
           : "",
         glowRec,
         withFeedback: true,

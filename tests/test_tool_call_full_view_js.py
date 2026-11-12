@@ -508,6 +508,93 @@ assert(root.querySelector('.conv-batch').getAttribute('aria-label').includes('ws
     )
 
 
+def test_coordinator_helpers_show_each_name_treated() -> None:
+    """The coordinator's screen-reader announcement, its "Always approve" label and
+    its auto-approved pill treat each tool name as the cards do."""
+    source = _COORDINATOR.read_text()
+    helpers = "\n".join(
+        _extract_braced(source, signature)
+        for signature in (
+            "  function _toolAnnounceText(items) {",
+            "  function _normaliseAutoApproveReason(raw) {",
+            "  function renderAutoApprovedPill(entries) {",
+            "  function _buildBatchActions(batch, items) {",
+        )
+    )
+    _run(
+        f"const conv = await import({_shared('conversation.js')});\n"
+        "const { convShownText, buildConvActions } = conv;\n"
+        "const _resolveBatchAction = () => {};\n"
+        "const KNOWN_AUTO_APPROVE_REASONS = new Set(['skill']);\n"
+        "const UNKNOWN_AUTO_APPROVE_REASON = 'unknown';\n"
+        + helpers
+        + "\n"
+        + r"""
+const ch = code => String.fromCharCode(code);
+const ESC = ch(27), sym = ch(0x241b);
+const bad = 'mcp__x' + ESC + '[2K';
+const said = _toolAnnounceText([{func_name: bad}, {func_name: 'bash'}]);
+assert(said.includes('mcp__x' + sym + '[2K') && !said.includes(ESC), 'announcement: ' + JSON.stringify(said));
+
+const pill = renderAutoApprovedPill([{func_name: 'bash', approval_label: bad, auto_approve_reason: 'skill'}]);
+const label = text(pill.children.find(el => el.className === 'ch-auto-approved-label'));
+assert(label.includes('mcp__x' + sym + '[2K') && !label.includes(ESC), 'pill label: ' + JSON.stringify(label));
+assert(pill.title.includes('mcp__x' + sym + '[2K') && !pill.title.includes(ESC), 'pill title: ' + JSON.stringify(pill.title));
+
+const call = name => ({func_name: name, approval_label: name, needs_approval: true});
+const actions = _buildBatchActions({}, [call('password=hunter2xyz'), call('bash'), call(bad)]);
+const always = actions.children.find(el => el.dataset && el.dataset.role === 'always');
+assert(always.title === 'Always approve password=***, bash, mcp__x' + sym + '[2K',
+  'each name is treated and the separators stay: ' + JSON.stringify(always.title));
+"""
+    )
+
+
+def test_interactive_always_label_and_late_verdict_toast_treat_names() -> None:
+    _pane(
+        r"""
+const ch = code => String.fromCharCode(code);
+const ESC = ch(27), sym = ch(0x241b);
+FakeElement.prototype.value = '';
+const call = (id, name) => ({call_id: id, func_name: name, approval_label: name, header: '', preview: '',
+  needs_approval: true, arguments: '{}'});
+receive({type: 'approve_request', cycle_id: 'cy1', items: [call('a1', 'password=hunter2xyz'), call('a2', 'bash'), call('a3', 'x' + ESC + '[2K')]});
+const always = root.querySelector('.conv-actions button[data-role="always"]');
+assert(always.title === 'Always approve password=***, bash, x' + sym + '[2K',
+  'each name is treated and the separators stay: ' + JSON.stringify(always.title));
+const block = root.querySelector('.conv-batch');
+assert(JSON.parse(block.dataset.alwaysNames).join('|') === 'password=hunter2xyz|bash|x' + ESC + '[2K',
+  'the names sent to the server stay raw');
+
+// A verdict landing after its row was replaced is toasted by the tool's name.
+const toast = document.createElement('div');
+toast.id = 'toast';
+html.appendChild(toast);
+document.getElementById = id => (id === 'toast' ? toast : null);
+pane.updateVerdictBadge({call_id: 'gone', func_name: 'bash' + ESC + '[2K', recommendation: 'review', confidence: 0.5});
+assert(toast.textContent === 'Judge verdict for bash' + sym + '[2K: review (50%)',
+  'the toast shows the symbol: ' + JSON.stringify(toast.textContent));
+""",
+        browser=True,
+    )
+
+
+def test_modules_import_the_convshowntext_they_call() -> None:
+    """A module that calls convShownText without importing it fails in the browser
+    on first use; the function-level harnesses import it themselves, so check
+    the module's own import."""
+    import re
+
+    for path in (_SHARED / "interactive.js", _COORDINATOR):
+        source = path.read_text(encoding="utf-8")
+        assert "convShownText(" in source
+        imports = re.findall(r'import\s*\{([^}]*)\}\s*from\s*"[^"]*conversation\.js"', source)
+        assert any(
+            "convShownText" in re.sub(r"//[^\n]*", "", block).replace(",", " ").split()
+            for block in imports
+        ), f"{path.name} calls convShownText without importing it from conversation.js"
+
+
 def test_open_full_calls_survive_a_rebuild() -> None:
     _builders(
         r"""

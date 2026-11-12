@@ -10,6 +10,19 @@ All development now integrates on `main`. Supported release lines are maintained
 on `stable/X.Y` branches; `stable/1.8` preserves the former stable branch.
 The separate `dev` branch is retired. See [the release process](docs/releasing.md).
 
+## [2026-11-12]
+
+### Security
+
+- **Tool cards now redact credentials and show control characters in a tool's
+  name and in the judge's explanation.** A tool name written by a model, and the
+  judge's summary, reasoning and evidence lines, were shown as received. They now
+  go through the same treatment as a command line: a credential is replaced with
+  a redaction marker and a control character appears as a visible symbol. This
+  covers the tool cards, the approval prompts, the "Always approve" labels, the
+  announcements read to a screen reader and the late-verdict notice, in both the
+  workstream and the coordinator panes.
+
 ## [2026-11-11]
 
 ### Fixed
