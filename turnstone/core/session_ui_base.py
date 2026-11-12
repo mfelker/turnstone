@@ -261,6 +261,10 @@ def publish_gate_state(items: list[dict[str, Any]], state: str) -> None:
         publish(state)
 
 
+# Issue #1276 (prototype): terminal ``user_decision`` for a call a deny rule refused.
+POLICY_DENIED_DECISION = "policy_denied"
+
+
 class ApprovalCycle:
     """One in-flight human-approval round on a workstream.
 
@@ -2452,6 +2456,7 @@ class SessionUIBase:
 
             def _commit_policy_result() -> None:
                 self._record_auto_approves(items, deferred=policy_deferred)
+                self._record_policy_refusals(items)
                 self._persist_auto_approved_heuristic_verdicts(items, deferred=policy_deferred)
                 self._enqueue({"type": "tool_info", "items": self._serialize_approval_items(items)})
 
@@ -2657,6 +2662,10 @@ class SessionUIBase:
             heuristic_row.setdefault("resolver_principal_id", "")
             if item.get("auto_approved"):
                 heuristic_row["user_decision"] = item.get("auto_approve_reason", "") or "pending"
+            elif item.get("_refused_by") == "policy":
+                # Issue #1276 (prototype): a deny rule refused this call; no
+                # person decides it, so it never joins ``pending_verdicts``.
+                heuristic_row["user_decision"] = POLICY_DENIED_DECISION
             else:
                 heuristic_row["user_decision"] = "pending"
                 pending_verdicts.append(heuristic_row)
@@ -2679,6 +2688,7 @@ class SessionUIBase:
             # late LLM verdict observes the final reason.  Only the in-memory
             # lookup changes here; durable audit is deferred below.
             self._record_auto_approves(items, deferred=deferred_auto_audit)
+            self._record_policy_refusals(items)
             with self._ws_lock:
                 self._ws_current_activity = f"⏳ Awaiting approval: {label} — {preview}"
                 self._ws_activity_state = "approval"
@@ -3729,12 +3739,17 @@ class SessionUIBase:
             return
         verdicts: list[dict[str, Any]] = []
         for it in items:
-            if not it.get("auto_approved"):
+            refused = it.get("_refused_by") == "policy"
+            if not it.get("auto_approved") and not refused:
                 continue
             hv = it.get("_heuristic_verdict")
             if not hv:
                 continue
-            hv["user_decision"] = it.get("auto_approve_reason", "") or "pending"
+            hv["user_decision"] = (
+                POLICY_DENIED_DECISION
+                if refused
+                else it.get("auto_approve_reason", "") or "pending"
+            )
             row = dict(hv)
             row["execution_principal_id"] = str(it.get("_principal_id") or "").strip()
             row.setdefault("resolver_principal_id", "")
@@ -3751,6 +3766,18 @@ class SessionUIBase:
             _persist()
         else:
             deferred.append(_persist)
+
+    def _record_policy_refusals(self, items: list[dict[str, Any]]) -> None:
+        """Issue #1276 (prototype): map each policy-refused call id to its
+        terminal decision so a late LLM verdict is stamped ``policy_denied``
+        through the same lookup ``on_intent_verdict`` uses for auto-approve
+        reasons, instead of being parked for a person's decision."""
+        ts = time.time()
+        with self._ws_lock:
+            for it in items:
+                cid = it.get("call_id", "")
+                if cid and it.get("_refused_by") == "policy":
+                    self._auto_approve_reasons[cid] = (POLICY_DENIED_DECISION, ts)
 
     def _record_auto_approves(
         self,
