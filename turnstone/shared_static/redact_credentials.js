@@ -39,7 +39,9 @@
 // shorter final line (a mid-line cap).  The run stops at the first line that
 // is not key-shaped and need not reach the end of the text; a BEGIN followed
 // by prose stays as written.  A line ends at a real or JSON-escaped newline,
-// a quote (lookahead, not consumed) or the end of the text.
+// a quote (lookahead, not consumed), the end of the text or a "..."
+// truncation marker (blanks before it are kept).  A base64 character may also
+// be the JSON-escaped "\/".
 // Engine parity: output_guard.py builds the same pattern from the same
 // fragments.  Both use only syntax the two engines read alike: (?![\s\S]) for
 // the end of text (never $, \Z or \A), [ \t] rather than \s in the new parts,
@@ -47,12 +49,17 @@
 const _PRIVATE_KEY_LABEL = String.raw`(?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED|PGP)\s+)?PRIVATE\s+KEY(?:\s+BLOCK)?`;
 const _PK_NL = String.raw`(?:\r?\n|(?:\\r)?\\n)`;
 const _PK_EOT = String.raw`(?![\s\S])`;
-const _PK_LINE_END = String.raw`[ \t]*(?=${_PK_NL}|${_PK_EOT}|["'])`;
+const _PK_B64 = String.raw`(?:[A-Za-z0-9+/]|\\/)`;
+const _PK_LINE_END = String.raw`(?:[ \t]*(?=${_PK_NL}|${_PK_EOT}|["'])|(?=[ \t]*\.\.\.))`;
 const _PK_HEADER = String.raw`${_PK_NL}[ \t]*[A-Za-z][A-Za-z0-9-]*:[^\r\n\\"']*`;
 const _PK_TAIL =
   String.raw`[ \t]*(?:${_PK_HEADER})*(?:${_PK_NL}[ \t]*)?` +
-  String.raw`(?:${_PK_NL}[ \t]*[A-Za-z0-9+/]{16,}={0,2}${_PK_LINE_END})+` +
-  String.raw`(?:${_PK_NL}[ \t]*[A-Za-z0-9+/]{1,15}={0,2}${_PK_LINE_END})?`;
+  String.raw`(?:${_PK_NL}[ \t]*${_PK_B64}{16,}={0,2}${_PK_LINE_END})+` +
+  String.raw`(?:${_PK_NL}[ \t]*${_PK_B64}{1,15}={0,2}${_PK_LINE_END})?`;
+const _PK_CLOSED =
+  String.raw`-----BEGIN\s+${_PRIVATE_KEY_LABEL}-----` +
+  String.raw`(?:(?!-----BEGIN)[\s\S])*?` +
+  String.raw`(?:-----END\s+${_PRIVATE_KEY_LABEL}-----|(?=-----BEGIN))`;
 const _RE_PRIVATE_KEY_BLOCK = new RegExp(
   String.raw`-----BEGIN\s+${_PRIVATE_KEY_LABEL}-----` +
     String.raw`(?:(?:(?!-----BEGIN)[\s\S])*?` +
@@ -60,6 +67,9 @@ const _RE_PRIVATE_KEY_BLOCK = new RegExp(
     String.raw`|${_PK_TAIL})`,
   "g",
 );
+// The same block without the key-shaped alternative: only an END or a later
+// BEGIN closes it.  privateKeyOpenIndex uses it.
+const _RE_PRIVATE_KEY_CLOSED = new RegExp(_PK_CLOSED, "g");
 const _RE_PRIVATE_KEY_BEGIN = new RegExp(
   String.raw`-----BEGIN\s+${_PRIVATE_KEY_LABEL}-----`,
 );
@@ -347,6 +357,27 @@ export function redactNamedValue(key, value) {
  */
 export function privateKeyBeginIndex(text) {
   return String(text).search(_RE_PRIVATE_KEY_BEGIN);
+}
+
+/**
+ * Where the first private-key BEGIN line in `text` starts that no END or later
+ * BEGIN closes, or -1.  Unlike privateKeyBeginIndex this reads raw text, and a
+ * cut-off key that redactCredentials would take by its key-shaped lines still
+ * counts as open here: its run may go on past the end of the text.
+ *
+ * @param {string} text - Raw text to search
+ * @returns {number} The index of the BEGIN line, or -1
+ */
+export function privateKeyOpenIndex(text) {
+  const s = String(text);
+  let pos = 0;
+  for (const m of s.matchAll(_RE_PRIVATE_KEY_CLOSED)) {
+    const gap = s.slice(pos, m.index).search(_RE_PRIVATE_KEY_BEGIN);
+    if (gap !== -1) return pos + gap;
+    pos = m.index + m[0].length;
+  }
+  const rest = s.slice(pos).search(_RE_PRIVATE_KEY_BEGIN);
+  return rest === -1 ? -1 : pos + rest;
 }
 
 // Pretty-print JSON WITH redaction — the sanctioned way to render a raw

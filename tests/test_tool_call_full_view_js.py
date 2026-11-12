@@ -627,10 +627,23 @@ conv.convResultExpandControl(unclosed).click();
 assert(!unclosed.children.at(-1).textContent.includes('CUTOFFKEYBODY'), 'as show all never shows it');
 // A cut-off key with no later BEGIN anywhere is redacted as a key-shaped run.
 const lone = conv.buildConvResult('x'.repeat(60 * 1024) + '-----BEGIN RSA PRIVATE KEY-----\n'
-  + 'MIIEowLONECUTOFFBODY' + 'A'.repeat(44) + '\n' + 'tail\n'.repeat(20000), {});
+  + 'MIIEowLONECUTOFFBODY' + 'A'.repeat(44) + '\n' + '$ ls -la\n'.repeat(20000), {});
 assert(!lone.children.at(-1).textContent.includes('LONECUTOFFBODY'), 'a lone cut-off key never shows');
 conv.convResultExpandControl(lone).click();
 assert(!lone.children.at(-1).textContent.includes('LONECUTOFFBODY'), 'nor when shown in full');
+// A key run that stops early (here at a prose line) is not the end of the
+// block: key lines after it, before a BEGIN past the window, never show in the
+// collapsed head, as they do not in show all.
+const keyLine = (i) => 'KEYLINE' + String(i).padStart(2, '0') + 'A'.repeat(50) + '\n';
+let after = '';
+for (let i = 3; i < 25; i += 1) after += keyLine(i);
+const stops = '$ ls -la\n'.repeat(2000) + '-----BEGIN RSA PRIVATE KEY-----\n' + keyLine(0) + keyLine(1) + keyLine(2)
+  + '-- run stops here --\n' + after + '$ ls -la\n'.repeat(8000) + '-----BEGIN CERTIFICATE-----\nMIIC\n-----END CERTIFICATE-----\n';
+const stopped = conv.buildConvResult(stops, {});
+assert(stopped.children.at(-1).textContent.includes('truncated for display'), 'that result is cut');
+assert(!/KEYLINE\d\d/.test(stopped.children.at(-1).textContent), 'no key line shows after a run that stopped early');
+conv.convResultExpandControl(stopped).click();
+assert(!/KEYLINE\d\d/.test(stopped.children.at(-1).textContent), 'nor in show all');
 const plain = conv.buildConvResult('x'.repeat(70 * 1024), {}).children.at(-1).textContent;
 assert(plain.indexOf('\n…') === 64 * 1024, 'plain text past the cut keeps its whole head');
 """

@@ -10,6 +10,16 @@ All development now integrates on `main`. Supported release lines are maintained
 on `stable/X.Y` branches; `stable/1.8` preserves the former stable branch.
 The separate `dev` branch is retired. See [the release process](docs/releasing.md).
 
+## [2026-11-12]
+
+### Security
+
+- **A private key cut off before its END line is now redacted.** Output from
+  `head -n`, `grep -A` or a size cap used to leave such a key readable and
+  unflagged. Now the lines of base64 that follow the BEGIN line, with any
+  `Name: value` headers, are replaced by the private-key marker and the output
+  is flagged, in tool results and in the web UI's collapsed view.
+
 ## [2026-11-11]
 
 ### Fixed

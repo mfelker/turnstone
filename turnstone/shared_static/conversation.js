@@ -14,7 +14,7 @@
 // + scroll, so they stay pane- and transport-agnostic.
 
 import {
-  privateKeyBeginIndex,
+  privateKeyOpenIndex,
   redactCredentials,
   redactNamedValue,
 } from "./redact_credentials.js";
@@ -1383,17 +1383,21 @@ const REDACT_WINDOW = 16 * 1024;
 // window's own end runs through is left as it is, at the very end of the
 // redacted window and shorter than REDACT_WINDOW, so the window's last
 // REDACT_WINDOW characters never show, however much earlier redactions
-// shortened it; and a private-key block still open in the window (a BEGIN that
-// survived redaction: no END, no later BEGIN and not key-shaped after it) may
-// close past it, where show all redacts it,
-// so the head stops before it.
+// shortened it; and a private-key block no END or later BEGIN closes in the
+// window may close past it, where show all redacts it, so the head stops
+// before it.  That block is found in the raw window with the key-shaped
+// alternative left out: a cut-off key redacted by its key-shaped lines may
+// still have more such lines past where its run stopped here.
 function _redactedHead(text) {
-  const head = redactCredentials(text.slice(0, RAW_CAP + REDACT_WINDOW));
+  const win = text.slice(0, RAW_CAP + REDACT_WINDOW);
+  const head = redactCredentials(win);
   let safe = head.length;
   if (text.length > RAW_CAP + REDACT_WINDOW) {
     safe = Math.max(0, head.length - REDACT_WINDOW);
-    const open = privateKeyBeginIndex(head);
-    if (open !== -1) safe = Math.min(safe, open);
+    const open = privateKeyOpenIndex(win);
+    if (open !== -1) {
+      safe = Math.min(safe, redactCredentials(win.slice(0, open)).length);
+    }
   }
   return _displayCut(head.slice(0, Math.min(RAW_CAP, safe)), text.length);
 }

@@ -26,6 +26,14 @@ MARK = "[REDACTED:private_key]"
 _HEAD = body(20)
 _SSH = body(5, 70, last=12)
 
+
+def _slashed(lines: list[str]) -> list[str]:
+    """Lines with a JSON-escaped slash (backslash, slash) inside each."""
+    return [x[:20] + "\\/" + x[22:] for x in lines]
+
+
+_CUT = "[900 chars truncated \u2014 line exceeded 500 char limit]"
+
 # (id, text, expected output of redact_credentials)
 POSITIVE = [
     ("head-n-20", BEGIN + "\n" + "\n".join(_HEAD) + "\n", MARK + "\n"),
@@ -64,6 +72,39 @@ POSITIVE = [
         '{"s": "' + BEGIN + "\\r\\n" + "\\r\\n".join(body(3)) + '", "rc": 0}',
         '{"s": "' + MARK + '", "rc": 0}',
     ),
+    (
+        "json-escaped-slashes",
+        '{"stdout": "' + BEGIN + "\\n" + "\\n".join(_slashed(body(4))) + '\\n", "rc": 0}',
+        '{"stdout": "' + MARK + '\\n", "rc": 0}',
+    ),
+    (
+        "json-escaped-slashes-short-last-line",
+        '{"s": "' + BEGIN + "\\n" + "\\n".join(_slashed(body(3))) + "\\n" + "ab\\/cd" + '"}',
+        '{"s": "' + MARK + '"}',
+    ),
+    (
+        "marker-after-cut-line",
+        BEGIN + "\n" + body(1)[0] + "\n" + body(1, 40)[0] + " ... " + _CUT + " ... ",
+        MARK + " ... " + _CUT + " ... ",
+    ),
+    (
+        "marker-after-first-cut-line",
+        BEGIN + "\n" + body(1, 40)[0] + " ... [900 chars truncated]",
+        MARK + " ... [900 chars truncated]",
+    ),
+    (
+        "search-suffix-marker",
+        BEGIN + "\n" + body(1)[0] + "\n" + body(1, 30)[0] + "...[truncated",
+        MARK + "...[truncated",
+    ),
+    ("ends-at-end-of-text", BEGIN + "\n" + body(1)[0] + "\n" + body(1, 30)[0], MARK),
+    ("single-16-char-line-at-end", BEGIN + "\n" + body(1, 16)[0], MARK),
+    (
+        "at-most-one-short-final-line",
+        BEGIN + "\n" + body(1)[0] + "\nAAAA\nBBBB\n",
+        MARK + "\nBBBB\n",
+    ),
+    ("blanks-after-the-begin-line", BEGIN + " \t\n" + body(1)[0] + "\n", MARK + "\n"),
     ("trailing-padding", BEGIN + "\n" + "\n".join(body(2)) + "==\n", MARK + "\n"),
 ]
 
@@ -74,6 +115,8 @@ NEGATIVE = [
     ("followed-by-example", BEGIN + "\nExample\n"),
     ("elided-body", BEGIN + "\nMIIEvQIBADANBg...\n"),
     ("example-on-begin-line", BEGIN + " (example)\n" + "\n".join(body(3)) + "\n"),
+    ("example-with-dots", BEGIN + "\nExample ...\n"),
+    ("text-after-the-begin-dashes", BEGIN + " x\n" + body(1)[0] + "\n"),
     ("setext-underline", BEGIN + "\n=====\n"),
     ("fifteen-chars", BEGIN + "\n" + body(1, 15)[0] + "\n"),
     (
