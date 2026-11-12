@@ -27496,15 +27496,6 @@ class ChatSession:
                         output = prepared["error"]
                         is_tool_error = True
                         child_effect_status = EffectStatus.NONE
-                    # Auto-execute tools in the auto_tools set.
-                    elif tool_name in auto_tools and not prepared.get("allow_private_origin"):
-                        # Paint the step pending under the task card before it
-                        # runs (web) / print the leg (CLI) — the typed successor
-                        # to the old on_info turn-leg.  Approval-gated tools
-                        # paint via approve_tools instead.
-                        self._paint_agent_step(parent_call_id, prepared)
-                        _, output = _execute_agent_tool(prepared, tool_name)
-                        is_tool_error = self._tool_error_flags.pop(tc_dict["id"], False)
                     # Other tools and private-network grants use the approval gate.
                     elif "execute" in prepared:
                         # Run the SAME intent-validation pipeline the main
