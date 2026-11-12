@@ -38,7 +38,9 @@ class PolicyVerdict:
       to interactive approval.
     """
 
-    kind: Literal["none", "deny", "allow", "defer"]
+    # ``"unchecked"`` (issue #1277 prototype): policies could not be read;
+    # present like ``defer`` but never auto-approve.
+    kind: Literal["none", "deny", "allow", "defer", "unchecked"]
     denied_tools: list[str] = field(default_factory=list)
     tool_names: list[str] = field(default_factory=list)
 
@@ -561,7 +563,7 @@ class ChannelRouter:
             # cannot check), and freezing every workstream on a storage hiccup is
             # worse. The channel then asks in the chat, or approves on its own
             # auto-approve settings.
-            return PolicyVerdict(kind="defer", tool_names=tool_names)
+            return PolicyVerdict(kind="unchecked", tool_names=tool_names)
 
         denied = [n for n, v in verdicts.items() if v == "deny"]
         if denied:

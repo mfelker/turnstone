@@ -1184,7 +1184,11 @@ class TurnstoneSlackBot:
             )
             policy_handled = True
 
-        if not policy_handled and (self.config.auto_approve or self._should_auto_approve(event)):
+        if (
+            not policy_handled
+            and verdict.kind != "unchecked"
+            and (self.config.auto_approve or self._should_auto_approve(event))
+        ):
             await self.router.send_approval(ws_id, cycle_id, approved=True)
             await self._client.chat_postMessage(
                 channel=slack_channel,
