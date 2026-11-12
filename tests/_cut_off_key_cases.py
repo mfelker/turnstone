@@ -97,6 +97,28 @@ POSITIVE = [
         BEGIN + "\n" + body(1)[0] + "\n" + body(1, 30)[0] + "...[truncated",
         MARK + "...[truncated",
     ),
+    # An elided doc example cannot be told from a key cut by a plain "...", and
+    # a missed key is worse than a false flag, so it is redacted.
+    (
+        "elided-long-line",
+        BEGIN + "\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC...\n",
+        MARK + "...\n",
+    ),
+    (
+        "plain-dots-at-end-of-text",
+        BEGIN + "\n" + body(1)[0] + "\n" + body(1, 40)[0] + "...",
+        MARK + "...",
+    ),
+    (
+        "plain-dots-then-text",
+        BEGIN + "\n" + body(1)[0] + "\n" + body(1, 40)[0] + "...\n$ ls",
+        MARK + "...\n$ ls",
+    ),
+    (
+        "plain-dots-in-json",
+        '{"s": "' + BEGIN + "\\n" + body(1)[0] + "\\n" + body(1, 40)[0] + '..."}',
+        '{"s": "' + MARK + '..."}',
+    ),
     ("ends-at-end-of-text", BEGIN + "\n" + body(1)[0] + "\n" + body(1, 30)[0], MARK),
     ("single-16-char-line-at-end", BEGIN + "\n" + body(1, 16)[0], MARK),
     (
@@ -115,7 +137,6 @@ NEGATIVE = [
     ("followed-by-example", BEGIN + "\nExample\n"),
     ("elided-body", BEGIN + "\nMIIEvQIBADANBg...\n"),
     ("example-on-begin-line", BEGIN + " (example)\n" + "\n".join(body(3)) + "\n"),
-    ("elided-long-line", BEGIN + "\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC...\n"),
     ("prose-with-an-ellipsis", BEGIN + "\nTheConfigurationLoader... reads it"),
     ("example-with-dots", BEGIN + "\nExample ...\n"),
     ("text-after-the-begin-dashes", BEGIN + " x\n" + body(1)[0] + "\n"),

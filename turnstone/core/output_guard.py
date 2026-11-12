@@ -94,7 +94,8 @@ _RE_CAMO_CAPS_ACTION = re.compile(
 # cap).  The run stops at the first line that is not key-shaped and need not
 # reach the end of the text; a BEGIN followed by prose stays as written.  A
 # line ends at a real or JSON-escaped newline, a quote (lookahead, not
-# consumed), the end of the text or a "...[" truncation marker (blanks before
+# consumed), the end of the text or a "..." cut (before a line break, a quote,
+# the end of the text or "["; blanks before
 # it are kept).  A base64 character may also be the JSON-escaped "\/".
 # Engine parity: redact_credentials.js builds the same pattern from the same
 # fragments.  Both use only syntax the two engines read alike: (?![\s\S]) for
@@ -104,7 +105,10 @@ _PRIVATE_KEY_LABEL = r"(?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED|PGP)\s+)?PRIVATE\s+KEY
 _PK_NL = r"(?:\r?\n|(?:\\r)?\\n)"
 _PK_EOT = r"(?![\s\S])"
 _PK_B64 = r"(?:[A-Za-z0-9+/]|\\/)"
-_PK_LINE_END = r"(?:[ \t]*(?=" + _PK_NL + r"|" + _PK_EOT + r"|[\"'])|(?=[ \t]*\.\.\.[ \t]*\[))"
+_PK_LINE_END = (
+    r"(?:[ \t]*(?=" + _PK_NL + r"|" + _PK_EOT + r"|[\"'])"
+    r"|(?=[ \t]*\.\.\.(?:[ \t]*\[|" + _PK_NL + r"|" + _PK_EOT + r"|[\"'])))"
+)
 _PK_HEADER = _PK_NL + r"[ \t]*[A-Za-z][A-Za-z0-9-]*:[^\r\n\\\"']*"
 _PK_TAIL = (
     r"[ \t]*(?:" + _PK_HEADER + r")*(?:" + _PK_NL + r"[ \t]*)?"
