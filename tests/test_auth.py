@@ -1435,6 +1435,15 @@ class TestServerLogin:
         )
         assert resp.status_code == 401
 
+    @pytest.mark.parametrize("path", ["/v1/api/auth/login", "/v1/api/auth/setup"])
+    def test_login_and_setup_over_64_kib_are_413(self, path):
+        resp = self.test_client.post(
+            path,
+            json={"username": "testuser", "password": "x" * (64 * 1024)},
+        )
+        assert resp.status_code == 413
+        assert resp.json()["code"] == "too_large"
+
     def test_login_invalid_credentials_401(self):
         resp = self.test_client.post(
             "/v1/api/auth/login",

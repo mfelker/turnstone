@@ -1782,3 +1782,128 @@ def test_route_proxy_refresh_retries_new_url_for_same_node_identity():
         "http://new:8080/v1/api/workstreams/saved/send",
     ]
     router.force_refresh.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Bounded request bodies (#1423)
+# ---------------------------------------------------------------------------
+
+
+def _chunked(total: int, chunk: int = 1024 * 1024) -> Any:
+    """A body of ``total`` bytes sent without a Content-Length."""
+
+    def gen() -> Any:
+        sent = 0
+        while sent < total:
+            n = min(chunk, total - sent)
+            sent += n
+            yield b"x" * n
+
+    return gen()
+
+
+class TestBoundedProxyBodies:
+    """Console handlers that buffer a body refuse one past their cap."""
+
+    def _client(self) -> tuple[TestClient, MagicMock]:
+        app = _make_app(router=_make_mock_router())
+        post = _make_proxy_post(json_data={"ws_id": _DEST_WS_ID, "name": "ok"})
+        _wire_proxy(app, post)
+        return TestClient(app, raise_server_exceptions=False), post
+
+    def test_constants_cover_the_largest_legitimate_bodies(self):
+        from turnstone.console.server import _PROXY_BODY_MAX_BYTES, _TTS_PROXY_BODY_MAX_BYTES
+        from turnstone.core.attachments import CREATE_ATTACHMENTS_TOTAL_CAP, LARGEST_KIND_SIZE_CAP
+        from turnstone.server import _STT_UPLOAD_CAP, _TTS_BODY_MAX_BYTES
+
+        assert int(CREATE_ATTACHMENTS_TOTAL_CAP * 1.1) <= _PROXY_BODY_MAX_BYTES
+        assert int(LARGEST_KIND_SIZE_CAP * 1.1) <= _PROXY_BODY_MAX_BYTES
+        assert int(_STT_UPLOAD_CAP * 1.1) <= _PROXY_BODY_MAX_BYTES
+        assert _TTS_PROXY_BODY_MAX_BYTES == _TTS_BODY_MAX_BYTES
+
+    def test_route_create_oversized_content_length_is_413(self):
+        from turnstone.core.attachments import CREATE_ATTACHMENTS_TOTAL_CAP
+
+        client, post = self._client()
+        resp = client.post(
+            f"/v1/api/route/workstreams/new?ws_id={_DEST_WS_ID}",
+            content=b"x",
+            headers={
+                **_TEST_AUTH_HEADERS,
+                "Content-Type": "multipart/form-data; boundary=b",
+                "Content-Length": str(int(CREATE_ATTACHMENTS_TOTAL_CAP * 1.1) + 1),
+            },
+        )
+        client.close()
+        assert resp.status_code == 413
+        post.assert_not_called()
+
+    def test_route_create_oversized_chunked_is_413(self):
+        from turnstone.core.attachments import CREATE_ATTACHMENTS_TOTAL_CAP
+
+        client, post = self._client()
+        resp = client.post(
+            f"/v1/api/route/workstreams/new?ws_id={_DEST_WS_ID}",
+            content=_chunked(int(CREATE_ATTACHMENTS_TOTAL_CAP * 1.1) + 1),
+            headers={**_TEST_AUTH_HEADERS, "Content-Type": "multipart/form-data; boundary=b"},
+        )
+        client.close()
+        assert resp.status_code == 413
+        assert resp.json()["code"] == "too_large"
+        post.assert_not_called()
+
+    def test_route_create_small_multipart_forwards_the_same_bytes(self):
+        client, post = self._client()
+        meta = {"ws_id": _DEST_WS_ID, "name": "m"}
+        built = httpx2.Request(
+            "POST",
+            "http://x/",
+            data={"meta": json.dumps(meta)},
+            files={"file": ("a.txt", b"hello world", "text/plain")},
+        )
+        raw = built.read()
+        resp = client.post(
+            f"/v1/api/route/workstreams/new?ws_id={_DEST_WS_ID}",
+            content=raw,
+            headers={**_TEST_AUTH_HEADERS, "Content-Type": built.headers["content-type"]},
+        )
+        client.close()
+        assert resp.status_code == 200, resp.text
+        assert post.call_count == 1
+        assert post.call_args.kwargs["content"] == raw
+
+    def test_attachment_proxy_oversized_is_413_and_not_forwarded(self):
+        from turnstone.console.server import _PROXY_BODY_MAX_BYTES
+
+        client, post = self._client()
+        resp = client.post(
+            "/v1/api/route/workstreams/ws-X/attachments",
+            content=_chunked(_PROXY_BODY_MAX_BYTES + 1),
+            headers={**_TEST_AUTH_HEADERS, "Content-Type": "multipart/form-data; boundary=b"},
+        )
+        client.close()
+        assert resp.status_code == 413
+        client.app.state.proxy_client.request.assert_not_called()
+        post.assert_not_called()
+
+    def test_cancel_with_an_oversized_body_is_413_not_an_empty_body(self):
+        client, _post = self._client()
+        resp = client.post(
+            "/v1/api/route/workstreams/abc123/cancel",
+            content=b'{"pad": "' + b"x" * (17 * 1024 * 1024) + b'"}',
+            headers={**_TEST_AUTH_HEADERS, "Content-Type": "application/json"},
+        )
+        client.close()
+        assert resp.status_code == 413
+        client.app.state.proxy_client.request.assert_not_called()
+
+    def test_delete_with_an_oversized_body_is_413(self):
+        client, post = self._client()
+        resp = client.post(
+            "/v1/api/route/workstreams/delete",
+            content=b'{"pad": "' + b"x" * (17 * 1024 * 1024) + b'"}',
+            headers={**_TEST_AUTH_HEADERS, "Content-Type": "application/json"},
+        )
+        client.close()
+        assert resp.status_code == 413
+        post.assert_not_called()

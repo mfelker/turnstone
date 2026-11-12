@@ -1717,6 +1717,10 @@ _STT_MAX_THREADS = 4
 # the slowest backend measured, a full-cap clip takes ~75 s;
 # test_the_console_outwaits_a_full_cap_clip pins the deadlines against it.
 _TTS_TEXT_CAP = 8000  # characters per synthesis request
+# JSON body cap for the TTS route: 12 bytes is the worst-case ensure_ascii escape per
+# character (one non-BMP character as two six-byte surrogate escapes), plus headroom
+# for the other fields.
+_TTS_BODY_MAX_BYTES = 12 * _TTS_TEXT_CAP + 4096
 
 # How many clips a node synthesizes at once, each on a thread of its own.
 _TTS_MAX_CONCURRENT = 2
@@ -2145,7 +2149,7 @@ async def text_to_speech(request: Request) -> Response:
     from turnstone.core.model_backend_auth import BackendAuthUnavailableError
     from turnstone.core.web_helpers import read_json_or_400
 
-    body = await read_json_or_400(request)
+    body = await read_json_or_400(request, max_bytes=_TTS_BODY_MAX_BYTES)
     if isinstance(body, JSONResponse):
         return body
     text = str(body.get("text") or "").strip()
@@ -4989,11 +4993,12 @@ async def internal_model_auth_cache_invalidate(request: Request) -> JSONResponse
     if auth_result is None or not auth_result.has_scope("service"):
         return JSONResponse({"error": "Service scope required"}, status_code=403)
 
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
-    user_id = body.get("user_id") if isinstance(body, dict) else None
+    from turnstone.core.web_helpers import read_json_or_400
+
+    body = await read_json_or_400(request)
+    if isinstance(body, JSONResponse):
+        return body
+    user_id = body.get("user_id")
     if (
         not isinstance(user_id, str)
         or not user_id

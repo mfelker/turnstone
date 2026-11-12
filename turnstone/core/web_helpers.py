@@ -103,8 +103,71 @@ def skill_summary_rows(storage: Any) -> list[dict[str, Any]]:
     return skills
 
 
-async def read_json_or_400(request: Request) -> dict[str, Any] | JSONResponse:
-    """Parse a JSON request body, returning a 400 response on failure.
+DEFAULT_JSON_BODY_MAX_BYTES = 16 * 1024 * 1024
+
+
+async def read_body_within(request: Request, max_bytes: int) -> bytes | JSONResponse:
+    """Read a whole request body, refusing one larger than *max_bytes*.
+
+    Returns the body bytes, or a 413 ``JSONResponse`` when the body is over
+    the cap (a ``Content-Length`` over the cap is refused before anything is
+    read; a chunked body is counted as it arrives and abandoned once it
+    passes the cap), or a 400 when the client disconnects mid-body.  The
+    stream is consumed: the body is not cached, so a later ``.body()``,
+    ``.json()`` or ``.form()`` on *request* would fail.
+    """
+    from starlette.requests import ClientDisconnect
+    from starlette.responses import JSONResponse as _JSONResponse
+
+    cl_raw = request.headers.get("content-length")
+    if cl_raw:
+        try:
+            cl = int(cl_raw)
+        except ValueError:
+            cl = -1
+        if cl > max_bytes:
+            return _JSONResponse(
+                {
+                    "error": (
+                        f"Request body too large ({cl:,} bytes by Content-Length); "
+                        f"cap is {max_bytes:,} bytes."
+                    ),
+                    "code": "too_large",
+                },
+                status_code=413,
+            )
+
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        async for chunk in request.stream():
+            total += len(chunk)
+            if total > max_bytes:
+                return _JSONResponse(
+                    {
+                        "error": (
+                            f"Request body too large (over {max_bytes:,} bytes); "
+                            f"cap is {max_bytes:,} bytes."
+                        ),
+                        "code": "too_large",
+                    },
+                    status_code=413,
+                )
+            chunks.append(chunk)
+    except ClientDisconnect:
+        return _JSONResponse(
+            {"error": "Request body interrupted before completion"}, status_code=400
+        )
+    return b"".join(chunks)
+
+
+async def read_json_or_400(
+    request: Request, *, max_bytes: int = DEFAULT_JSON_BODY_MAX_BYTES
+) -> dict[str, Any] | JSONResponse:
+    """Parse a JSON request body, returning a 400 (or 413) response on failure.
+
+    The body is read through :func:`read_body_within`, so one over *max_bytes*
+    gets a 413 instead of being buffered whole.
 
     Callers should check ``isinstance(result, JSONResponse)`` and return
     it early when the parse fails::
@@ -115,8 +178,11 @@ async def read_json_or_400(request: Request) -> dict[str, Any] | JSONResponse:
     """
     from starlette.responses import JSONResponse as _JSONResponse
 
+    data = await read_body_within(request, max_bytes)
+    if isinstance(data, _JSONResponse):
+        return data
     try:
-        raw: Any = await request.json()
+        raw: Any = json.loads(data)
         if not isinstance(raw, dict):
             # Valid JSON, wrong shape (list/string/number at top level):
             # without this check the declared dict type is a lie and every

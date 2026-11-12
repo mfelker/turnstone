@@ -434,6 +434,143 @@ class TestMultipartBodyBudget:
         assert status == 200
 
 
+class TestJsonBodyBudget:
+    """A JSON body is read only up to its cap, chunked or not."""
+
+    CAP = 64 * 1024
+    CHUNK = 4 * 1024
+
+    def _app(self) -> Any:
+        from starlette.applications import Starlette
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+
+        from turnstone.core.web_helpers import read_json_or_400
+
+        async def echo(request: Request) -> JSONResponse:
+            body = await read_json_or_400(request, max_bytes=self.CAP)
+            if isinstance(body, JSONResponse):
+                return body
+            return JSONResponse({"keys": sorted(body)})
+
+        return Starlette(routes=[Route("/json", echo, methods=["POST"])])
+
+    async def _send(
+        self, size: int, *, content_length: str | None = None, chunked: bool = True
+    ) -> tuple[Any, int]:
+        """POST a JSON object padded to ``size`` bytes; return the response and bytes pulled."""
+        import httpx2
+
+        doc = b'{"pad": "' + b"x" * (size - 11) + b'"}'
+        assert len(doc) == size
+        parts = [doc[i : i + self.CHUNK] for i in range(0, len(doc), self.CHUNK)]
+        pulled = 0
+
+        async def body() -> Any:
+            nonlocal pulled
+            for part in parts:
+                pulled += len(part)
+                yield part
+
+        headers = {"Content-Type": "application/json"}
+        if content_length is not None:
+            headers["Content-Length"] = content_length
+        transport = httpx2.ASGITransport(app=self._app())
+        async with httpx2.AsyncClient(
+            transport=transport, base_url="http://app.example.com"
+        ) as http:
+            resp = await http.post("/json", content=body() if chunked else doc, headers=headers)
+        return resp, pulled
+
+    @pytest.mark.anyio
+    async def test_a_chunked_oversized_body_is_refused_early(self) -> None:
+        resp, pulled = await self._send(4 * self.CAP)
+        assert resp.status_code == 413
+        assert "content-length" not in resp.request.headers
+        assert pulled <= self.CAP + 2 * self.CHUNK, "the rest of the body is never read"
+
+    @pytest.mark.anyio
+    async def test_an_oversized_content_length_reads_nothing(self) -> None:
+        import httpx2
+
+        pulled = 0
+
+        async def body() -> Any:
+            nonlocal pulled
+            pulled += 1
+            yield b"{}"
+
+        transport = httpx2.ASGITransport(app=self._app())
+        async with httpx2.AsyncClient(
+            transport=transport, base_url="http://app.example.com"
+        ) as http:
+            resp = await http.post(
+                "/json",
+                content=body(),
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Length": str(self.CAP + 1),
+                },
+            )
+        assert resp.status_code == 413
+        assert pulled == 0
+
+    @pytest.mark.anyio
+    async def test_a_chunked_body_under_the_cap_parses(self) -> None:
+        resp, _pulled = await self._send(self.CAP // 2)
+        assert resp.status_code == 200
+        assert resp.json() == {"keys": ["pad"]}
+
+    @pytest.mark.anyio
+    async def test_the_413_names_its_code(self) -> None:
+        resp, _pulled = await self._send(2 * self.CAP)
+        assert resp.status_code == 413
+        assert resp.json()["code"] == "too_large"
+        assert "error" in resp.json()
+
+    @pytest.mark.anyio
+    async def test_a_non_object_body_is_still_400(self) -> None:
+        import httpx2
+
+        transport = httpx2.ASGITransport(app=self._app())
+        async with httpx2.AsyncClient(
+            transport=transport, base_url="http://app.example.com"
+        ) as http:
+            resp = await http.post("/json", content=b"[1, 2]")
+        assert resp.status_code == 400
+        assert resp.json() == {"error": "Request body must be a JSON object"}
+
+    @pytest.mark.anyio
+    async def test_a_malformed_content_length_falls_back_to_counting(self) -> None:
+        # The server would reject a bad Content-Length on a real socket; the
+        # ASGI transport hands it through, which is what the reader must survive.
+        import httpx2
+        from starlette.applications import Starlette
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+
+        from turnstone.core.web_helpers import read_body_within
+
+        async def read(request: Request) -> JSONResponse:
+            got = await read_body_within(request, self.CAP)
+            if isinstance(got, JSONResponse):
+                return got
+            return JSONResponse({"bytes": len(got)})
+
+        transport = httpx2.ASGITransport(
+            app=Starlette(routes=[Route("/b", read, methods=["POST"])])
+        )
+        async with httpx2.AsyncClient(
+            transport=transport, base_url="http://app.example.com"
+        ) as http:
+            ok = await http.post("/b", content=b"x" * 100, headers={"Content-Length": "abc"})
+            big = await http.post(
+                "/b", content=b"x" * (self.CAP + 1), headers={"Content-Length": "abc"}
+            )
+        assert ok.status_code == 200 and ok.json() == {"bytes": 100}
+        assert big.status_code == 413
+
+
 class TestBodiesNestedTooDeeply:
     """A body nested too deeply to parse is a 400, as malformed JSON is."""
 

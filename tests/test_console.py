@@ -3717,8 +3717,8 @@ class TestProxyTtsTimeout:
             seen.update(request.extensions["timeout"])
             return httpx2.Response(200, content=b"ok")
 
-        async def _body():
-            return b"{}"
+        async def _stream():
+            yield b"{}"
 
         async def _run():
             async with httpx2.AsyncClient(
@@ -3727,7 +3727,7 @@ class TestProxyTtsTimeout:
                 request = SimpleNamespace(
                     app=SimpleNamespace(state=SimpleNamespace(proxy_client=client)),
                     method="POST",
-                    body=_body,
+                    stream=_stream,
                     headers={"content-type": "application/json"},
                     url=SimpleNamespace(query=""),
                 )
@@ -3795,8 +3795,8 @@ class TestProxyTtsDeparture:
 
     @staticmethod
     def _request(client, *, gone):
-        async def _body():
-            return b'{"text": "hello"}'
+        async def _stream():
+            yield b'{"text": "hello"}'
 
         async def _is_disconnected():
             return gone()
@@ -3804,7 +3804,7 @@ class TestProxyTtsDeparture:
         return SimpleNamespace(
             app=SimpleNamespace(state=SimpleNamespace(proxy_client=client)),
             method="POST",
-            body=_body,
+            stream=_stream,
             headers={"content-type": "application/json"},
             url=SimpleNamespace(query=""),
             is_disconnected=_is_disconnected,
@@ -3880,15 +3880,15 @@ class TestProxyPostRetryAfter:
                 headers={"Retry-After": retry_after},
             )
 
-        async def _body():
-            return b"{}"
+        async def _stream():
+            yield b"{}"
 
         async def _run():
             async with httpx2.AsyncClient(transport=httpx2.MockTransport(_node)) as client:
                 request = SimpleNamespace(
                     app=SimpleNamespace(state=SimpleNamespace(proxy_client=client)),
                     method="POST",
-                    body=_body,
+                    stream=_stream,
                     headers={"content-type": "application/json"},
                     url=SimpleNamespace(query=""),
                 )
@@ -3905,3 +3905,92 @@ class TestProxyPostRetryAfter:
         resp = self._post(monkeypatch, "Wed, 21 Oct 2026 07:28:00 GMT")
         assert resp.status_code == 429
         assert "retry-after" not in resp.headers
+
+
+class TestProxyBodyBounds:
+    """``_proxy_post`` and ``_proxy_tts`` buffer a body only up to their cap (#1423)."""
+
+    @staticmethod
+    def _request(chunks, *, content_length=None, calls=None):
+        async def _stream():
+            if calls is not None:
+                calls.append("stream")
+            for chunk in chunks:
+                yield chunk
+
+        headers = {"content-type": "application/json"}
+        if content_length is not None:
+            headers["content-length"] = str(content_length)
+
+        async def _is_disconnected():
+            return False
+
+        return SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(proxy_client=None)),
+            method="POST",
+            stream=_stream,
+            headers=headers,
+            url=SimpleNamespace(query=""),
+            is_disconnected=_is_disconnected,
+        )
+
+    @staticmethod
+    def _run(monkeypatch, fn_name, request, path):
+        import httpx2
+
+        from turnstone.console import server as csrv
+
+        forwarded: list[bytes] = []
+
+        async def _node(req):
+            forwarded.append(req.content)
+            return httpx2.Response(200, content=b"ok")
+
+        async def _go():
+            async with httpx2.AsyncClient(transport=httpx2.MockTransport(_node)) as client:
+                request.app.state.proxy_client = client
+                return await getattr(csrv, fn_name)(
+                    request, "http://n:1", path, api_prefix="v1/api"
+                )
+
+        monkeypatch.setattr(csrv, "_proxy_auth_headers", lambda request: {})
+        return asyncio.run(_go()), forwarded
+
+    def test_proxy_post_oversized_content_length_is_413(self, monkeypatch):
+        from turnstone.console.server import _PROXY_BODY_MAX_BYTES
+
+        req = self._request([b"{}"], content_length=_PROXY_BODY_MAX_BYTES + 1)
+        resp, forwarded = self._run(monkeypatch, "_proxy_post", req, "workstreams/x/send")
+        assert resp.status_code == 413
+        assert forwarded == []
+
+    def test_proxy_post_oversized_chunked_is_413(self, monkeypatch):
+        from turnstone.console import server as csrv
+
+        monkeypatch.setattr(csrv, "_PROXY_BODY_MAX_BYTES", 1000)
+        req = self._request([b"x" * 600, b"x" * 600, b"x" * 600])
+        resp, forwarded = self._run(monkeypatch, "_proxy_post", req, "workstreams/x/send")
+        assert resp.status_code == 413
+        assert forwarded == []
+
+    def test_proxy_post_under_the_cap_forwards_the_bytes(self, monkeypatch):
+        req = self._request([b'{"a": ', b"1}"])
+        resp, forwarded = self._run(monkeypatch, "_proxy_post", req, "workstreams/x/send")
+        assert resp.status_code == 200
+        assert forwarded == [b'{"a": 1}']
+
+    def test_proxy_tts_over_its_cap_is_413(self, monkeypatch):
+        from turnstone.console.server import _TTS_PROXY_BODY_MAX_BYTES
+
+        req = self._request([b"x" * (_TTS_PROXY_BODY_MAX_BYTES + 1)])
+        resp, forwarded = self._run(monkeypatch, "_proxy_tts", req, "tts")
+        assert resp.status_code == 413
+        assert forwarded == []
+
+    def test_proxy_tts_under_its_cap_forwards_once_with_one_read(self, monkeypatch):
+        calls: list[str] = []
+        req = self._request([b'{"text": "hi"}'], calls=calls)
+        resp, forwarded = self._run(monkeypatch, "_proxy_tts", req, "tts")
+        assert resp.status_code == 200
+        assert forwarded == [b'{"text": "hi"}']
+        assert calls == ["stream"], "the body is read exactly once"

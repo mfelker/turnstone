@@ -1739,7 +1739,7 @@ async def handle_auth_login(request: Request, audience: str, cookie_name: str) -
 
     from turnstone.core.web_helpers import read_json_or_400
 
-    body = await read_json_or_400(request)
+    body = await read_json_or_400(request, max_bytes=64 * 1024)
     if isinstance(body, JSONResponse):
         return body
 
@@ -1899,7 +1899,7 @@ async def handle_auth_setup(request: Request, audience: str, cookie_name: str) -
 
     from turnstone.core.web_helpers import read_json_or_400
 
-    body = await read_json_or_400(request)
+    body = await read_json_or_400(request, max_bytes=64 * 1024)
     if isinstance(body, JSONResponse):
         return body
 

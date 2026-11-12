@@ -1426,6 +1426,43 @@ class TestTextToSpeech:
         )
         assert resp.status_code == 200, resp.text
 
+    def test_a_full_cap_of_non_bmp_text_clears_the_body_cap(self, voice_app_client):
+        # ensure_ascii escapes each non-BMP character as two six-byte surrogate
+        # escapes: the worst case the body cap is sized for.
+        import json
+
+        from turnstone.server import _TTS_BODY_MAX_BYTES, _TTS_TEXT_CAP
+
+        client, _ = voice_app_client
+        payload = json.dumps({"text": "\U0001f600" * _TTS_TEXT_CAP}, ensure_ascii=True)
+        assert len(payload) < _TTS_BODY_MAX_BYTES
+        resp = client.post(
+            "/v1/api/tts",
+            content=payload,
+            headers={**_auth("userA"), "Content-Type": "application/json"},
+        )
+        assert resp.status_code != 413
+        assert resp.status_code in (200, 503), resp.text
+
+        too_long = json.dumps({"text": "\U0001f600" * (_TTS_TEXT_CAP + 1)}, ensure_ascii=True)
+        resp = client.post(
+            "/v1/api/tts",
+            content=too_long,
+            headers={**_auth("userA"), "Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_a_body_past_the_body_cap_is_413(self, voice_app_client):
+        from turnstone.server import _TTS_BODY_MAX_BYTES
+
+        client, _ = voice_app_client
+        resp = client.post(
+            "/v1/api/tts",
+            content=b'{"text": "' + b"x" * _TTS_BODY_MAX_BYTES + b'"}',
+            headers={**_auth("userA"), "Content-Type": "application/json"},
+        )
+        assert resp.status_code == 413
+
     def test_a_play_starts_beside_one_and_is_refused_beside_two(self, voice_app_client):
         # Refused, not queued: queue time would come out of the console's wait.
         client, _ = voice_app_client

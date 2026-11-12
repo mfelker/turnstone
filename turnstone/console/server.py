@@ -157,6 +157,7 @@ from turnstone.core.web_helpers import (
     RevalidatingStaticFiles,
     is_safe_static_asset_path,
     lease_refusal_response,
+    read_body_within,
     read_json_or_400,
     require_storage_or_503,
     static_asset_cache_control,
@@ -327,6 +328,21 @@ _PROXY_CLIENT_TIMEOUT_S = 30
 # proxy in front of the console has to allow this long without data; the
 # repository's AWS module sets its load balancer's idle timeout to 120 s.
 _TTS_PROXY_READ_TIMEOUT_S = 90.0
+
+# Byte cap on a body the console buffers whole before forwarding it to a node.
+# It has to admit the biggest legitimate payload on any proxied route, each with
+# the 10% framing slack the multipart readers allow: a create with attachments
+# (CREATE_ATTACHMENTS_TOTAL_CAP, 64 MiB), a single attachment upload
+# (LARGEST_KIND_SIZE_CAP, 32 MiB) and a dictation clip (the node's
+# _STT_UPLOAD_CAP, 25 MiB).  Tests pin it against all three.  Uploads to
+# files/upload are streamed under their own cap instead.
+_PROXY_BODY_MAX_BYTES = 72 * 1024 * 1024
+
+# The node's TTS body cap (turnstone.server._TTS_BODY_MAX_BYTES): its 8,000
+# character text cap at the worst-case 12 JSON-escaped bytes per character, plus
+# 4 KiB for the other fields.  Importing the node module here would pull in the
+# whole node server, so a test pins the two equal.
+_TTS_PROXY_BODY_MAX_BYTES = 12 * 8000 + 4096
 
 # How often a forwarded ``tts`` call checks whether the browser is still there.
 _TTS_DEPARTURE_POLL_S = 1.0
@@ -2063,6 +2079,26 @@ async def _refresh_unready_router(
     return None
 
 
+def _replayed_request(request: Request, body: bytes) -> Request:
+    """A request over *request*'s scope whose body is the already-read *body*.
+
+    ``read_body_within`` spends the stream and Starlette doesn't cache it, so
+    anything that still needs to parse the body (``.form()``) gets this.
+    """
+    from starlette.requests import Request as _Request
+
+    sent = False
+
+    async def receive() -> Any:
+        nonlocal sent
+        if sent:
+            return {"type": "http.disconnect"}
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return _Request(request.scope, receive)
+
+
 async def route_create(request: Request) -> Response:
     """POST /v1/api/route/workstreams/new — create via rendezvous routing.
 
@@ -2072,6 +2108,7 @@ async def route_create(request: Request) -> Response:
     ``meta`` field to require the same destination id, then forwards the
     original body and boundary unchanged.
     """
+    from turnstone.core.attachments import CREATE_ATTACHMENTS_TOTAL_CAP
     from turnstone.core.auth import require_any_permission
 
     t0 = time.monotonic()
@@ -2139,10 +2176,15 @@ async def route_create(request: Request) -> Response:
         # the row on a node that follow-up requests do not select.  Buffering
         # is already part of this proxy path, so parse only the metadata here
         # and still forward the original bytes and boundary verbatim.
-        raw_body = await request.body()
+        read = await read_body_within(request, int(CREATE_ATTACHMENTS_TOTAL_CAP * 1.1))
+        if isinstance(read, JSONResponse):
+            return _record_route(request, "create", read.status_code, t0, read)
+        raw_body = read
         form = None
         try:
-            form = await request.form()
+            # The stream is spent, so parse the form from a request that
+            # replays the bytes already read.
+            form = await _replayed_request(request, raw_body).form()
             meta_raw = form.get("meta")
             parsed_meta = json.loads(meta_raw) if isinstance(meta_raw, str) else None
             has_files = any(not isinstance(value, str) for value in form.values())
@@ -2620,7 +2662,10 @@ async def route_attachment_proxy(request: Request) -> Response:
         upstream_headers["Content-Type"] = request.headers.get(
             "content-type", "application/octet-stream"
         )
-        body = await request.body()
+        read = await read_body_within(request, _PROXY_BODY_MAX_BYTES)
+        if isinstance(read, JSONResponse):
+            return _record_route(request, method, read.status_code, t0, read)
+        body = read
         try:
             resp = await client.request(
                 request.method,
@@ -2939,38 +2984,15 @@ async def route_proxy(request: Request) -> Response:
     if refused is not None:
         return refused
 
-    try:
-        body = await request.json()
-    except Exception:
-        if verb == "cancel":
+    body = await read_json_or_400(request)
+    if isinstance(body, JSONResponse):
+        if verb == "cancel" and body.status_code == 400:
             # Match the node endpoint: cancel is a recovery verb, so an
             # absent or malformed body remains cooperative ``force=false``.
+            # Only a 400 falls back; an oversized body is still refused.
             body = {}
         else:
-            return _record_route(
-                request,
-                verb,
-                400,
-                t0,
-                JSONResponse(
-                    {"error": "Invalid JSON body"},
-                    status_code=400,
-                ),
-            )
-    if not isinstance(body, dict):
-        if verb == "cancel":
-            body = {}
-        else:
-            return _record_route(
-                request,
-                verb,
-                400,
-                t0,
-                JSONResponse(
-                    {"error": "Request body must be a JSON object"},
-                    status_code=400,
-                ),
-            )
+            return _record_route(request, verb, body.status_code, t0, body)
 
     # Path-keyed shape (post-1.5) carries ws_id in the URL; the
     # legacy command route still mounts at a body-keyed URL and
@@ -3084,18 +3106,11 @@ async def route_workstream_delete(request: Request) -> Response:
     with no row; others go to the node that owns the workstream.
     """
     t0 = time.monotonic()
-    try:
-        body = await request.json()
-    except Exception:
-        return _record_route(
-            request,
-            "delete",
-            400,
-            t0,
-            JSONResponse({"error": "Invalid JSON body"}, status_code=400),
-        )
+    body = await read_json_or_400(request)
+    if isinstance(body, JSONResponse):
+        return _record_route(request, "delete", body.status_code, t0, body)
 
-    ws_id = body.get("ws_id", "") if isinstance(body, dict) else ""
+    ws_id = body.get("ws_id", "")
     if not isinstance(ws_id, str) or not _PATH_SAFE_WS_ID_RE.fullmatch(ws_id):
         return _record_route(
             request,
@@ -3751,14 +3766,24 @@ async def _proxy_get(request: Request, server_url: str, path: str) -> Response:
 
 
 async def _proxy_post(
-    request: Request, server_url: str, path: str, *, api_prefix: str = "api"
+    request: Request,
+    server_url: str,
+    path: str,
+    *,
+    api_prefix: str = "api",
+    body: bytes | None = None,
 ) -> Response:
-    """Forward a non-GET request (POST/PUT/DELETE) to the target server."""
+    """Forward a non-GET request (POST/PUT/DELETE) to the target server.
+
+    *body* is a request body the caller has already read (the stream can only
+    be read once); without it the body is read here, capped at
+    ``_PROXY_BODY_MAX_BYTES``.
+    """
     from turnstone.core.web_helpers import BoundedUploadStream, UploadBodyError
 
     client: httpx2.AsyncClient = request.app.state.proxy_client
     upload_stream: BoundedUploadStream | None = None
-    body: bytes | BoundedUploadStream
+    content: bytes | BoundedUploadStream
     if re.fullmatch(r"workstreams/[^/]+/files/upload", path):
         from turnstone.core.auth import require_permission
         from turnstone.core.filesystem import UPLOAD_SIZE_CAP
@@ -3771,9 +3796,14 @@ async def _proxy_post(
             upload_stream = BoundedUploadStream(request, max_bytes=UPLOAD_SIZE_CAP)
         except UploadBodyError as exc:
             return exc.response()
-        body = upload_stream
+        content = upload_stream
+    elif body is not None:
+        content = body
     else:
-        body = await request.body()
+        read = await read_body_within(request, _PROXY_BODY_MAX_BYTES)
+        if isinstance(read, JSONResponse):
+            return read
+        content = read
     content_type = request.headers.get("content-type", "application/json")
     target = f"{server_url}/{api_prefix}/{path}"
     if request.url.query:
@@ -3792,7 +3822,7 @@ async def _proxy_post(
         resp = await client.request(
             request.method,
             target,
-            content=body,
+            content=content,
             headers=headers,
             timeout=timeout,
         )
@@ -3832,8 +3862,12 @@ async def _proxy_tts(request: Request, server_url: str, path: str, *, api_prefix
     node's own watcher turns into an abort of its backend call.
     """
     # Read the body first: is_disconnected() would otherwise swallow it.
-    await request.body()
-    call = asyncio.create_task(_proxy_post(request, server_url, path, api_prefix=api_prefix))
+    body = await read_body_within(request, _TTS_PROXY_BODY_MAX_BYTES)
+    if isinstance(body, JSONResponse):
+        return body
+    call = asyncio.create_task(
+        _proxy_post(request, server_url, path, api_prefix=api_prefix, body=body)
+    )
     try:
         while True:
             done, _ = await asyncio.wait({call}, timeout=_TTS_DEPARTURE_POLL_S)
@@ -9986,7 +10020,7 @@ _PARSE_SKILL_MAX_CHARS = 32_768
 # so a legitimate max-length ``raw`` produces a body well above the char cap
 # — rejecting at exactly 32 KiB would 413 valid near-max requests.  This
 # threshold only needs to refuse obviously oversized payloads before
-# ``request.json()`` buffers them; the per-string ``len(raw)`` check below
+# the body reader buffers them; the per-string ``len(raw)`` check below
 # is the authoritative limit.
 _PARSE_SKILL_MAX_BODY_BYTES = _PARSE_SKILL_MAX_CHARS * 4
 
@@ -10012,15 +10046,12 @@ async def admin_parse_skill(request: Request) -> JSONResponse:
     if err:
         return err
 
-    # Reject oversized bodies before buffering — protects worker memory from
-    # an admin token spraying multi-GB JSON.  Threshold is generous enough
-    # to admit a max-length ``raw`` plus its JSON wrapper and escaping; the
-    # per-string check below enforces the exact 32 KiB rule.
-    cl = request.headers.get("content-length")
-    if cl and cl.isdigit() and int(cl) > _PARSE_SKILL_MAX_BODY_BYTES:
-        return JSONResponse({"error": "request body too large"}, status_code=413)
-
-    body = await read_json_or_400(request)
+    # The reader refuses an oversized body before buffering it (chunked ones
+    # included) — protects worker memory from an admin token spraying multi-GB
+    # JSON.  The cap is generous enough to admit a max-length ``raw`` plus its
+    # JSON wrapper and escaping; the per-string check below enforces the exact
+    # 32 KiB rule.
+    body = await read_json_or_400(request, max_bytes=_PARSE_SKILL_MAX_BODY_BYTES)
     if isinstance(body, JSONResponse):
         return body
 
@@ -16435,14 +16466,9 @@ async def admin_effort_ladder(request: Request) -> JSONResponse:
     if err:
         return err
 
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-    if not isinstance(body, dict):
-        # json() happily parses null/arrays/strings — .get() on those
-        # would 500 where the contract says 400.
-        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    body = await read_json_or_400(request)
+    if isinstance(body, JSONResponse):
+        return body
     provider = str(body.get("provider") or "").strip()
     model = str(body.get("model") or "").strip()
     capabilities = body.get("capabilities")
