@@ -139,6 +139,13 @@ _JUDGE_READ_LIMIT = 32_768
 # Extra characters read past the limit when redacting, so a credential (or a
 # whole PEM private-key block) that straddles the cut is seen and redacted whole.
 _JUDGE_REDACT_OVERSCAN = 8_192
+
+
+def _last_whitespace(text: str, start: int) -> int:
+    """Index of the last whitespace character at or after *start*, else -1."""
+    return max(text.rfind(ch, start) for ch in " \t\r\n\f\v")
+
+
 _JUDGE_DIRECTORY_LIMIT = 200
 
 # ---------------------------------------------------------------------------
@@ -2191,7 +2198,7 @@ class IntentJudge:
         Runs the output guard with the rule registry's patterns, so
         admin-defined secret patterns apply to the judge's evidence too.
         """
-        from turnstone.core.output_guard import evaluate_output
+        from turnstone.core.output_guard import evaluate_output, redact_credentials
 
         registry = self._rule_registry
         assessment = evaluate_output(
@@ -2200,7 +2207,10 @@ class IntentJudge:
             budget_seconds=self._config.output_guard_budget_seconds,
             patterns=registry.output_patterns if registry is not None else None,
         )
-        return assessment.sanitized if assessment.sanitized is not None else text
+        sanitized = assessment.sanitized if assessment.sanitized is not None else text
+        # Fail closed on the guard's time budget: an exhausted budget can skip
+        # the credential stage, so the budget-free built-in set always runs too.
+        return redact_credentials(sanitized)
 
     @staticmethod
     def _exec_read_only_tool(
@@ -2234,13 +2244,16 @@ class IntentJudge:
                 truncated = len(content) > _JUDGE_READ_LIMIT
                 if redact is not None:
                     if len(content) > window:
-                        # The file goes on past the window: drop its partial
-                        # last line, which may hold a credential cut short
-                        # enough to escape every pattern.  Only a cut past the
-                        # limit is safe; a single long line keeps the window.
-                        last_newline = content.rfind("\n", _JUDGE_READ_LIMIT)
-                        if last_newline != -1:
-                            content = content[: last_newline + 1]
+                        # The file goes on past the window, so its last token
+                        # may be a credential cut short enough to escape every
+                        # pattern: drop it, cutting at the last whitespace past
+                        # the limit.  With none there, one whitespace-free run
+                        # straddles the limit and is dropped whole (fail
+                        # closed), so no text from a cut token is returned.
+                        cut = _last_whitespace(content, _JUDGE_READ_LIMIT)
+                        if cut == -1:
+                            cut = _last_whitespace(content[:_JUDGE_READ_LIMIT], 0)
+                        content = content[: cut + 1]
                     content = redact(content)
                 if truncated:
                     try:
