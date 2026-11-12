@@ -139,13 +139,6 @@ _JUDGE_READ_LIMIT = 32_768
 # Extra characters read past the limit when redacting, so a credential (or a
 # whole PEM private-key block) that straddles the cut is seen and redacted whole.
 _JUDGE_REDACT_OVERSCAN = 8_192
-
-
-def _last_whitespace(text: str, start: int) -> int:
-    """Index of the last whitespace character at or after *start*, else -1."""
-    return max(text.rfind(ch, start) for ch in " \t\r\n\f\v")
-
-
 _JUDGE_DIRECTORY_LIMIT = 200
 
 # ---------------------------------------------------------------------------
@@ -2244,15 +2237,17 @@ class IntentJudge:
                 truncated = len(content) > _JUDGE_READ_LIMIT
                 if redact is not None:
                     if len(content) > window:
-                        # The file goes on past the window, so its last token
-                        # may be a credential cut short enough to escape every
-                        # pattern: drop it, cutting at the last whitespace past
-                        # the limit.  With none there, one whitespace-free run
-                        # straddles the limit and is dropped whole (fail
-                        # closed), so no text from a cut token is returned.
-                        cut = _last_whitespace(content, _JUDGE_READ_LIMIT)
+                        # The file goes on past the window, so its last line
+                        # may hold a credential cut short enough to escape
+                        # every pattern (a quoted value can contain spaces, so
+                        # only a line break is a safe cut): drop that partial
+                        # line, cutting at the last newline past the limit.
+                        # With none there, the line straddling the limit is
+                        # dropped whole (fail closed); a file with no newline
+                        # before it then yields only the truncation marker.
+                        cut = content.rfind("\n", _JUDGE_READ_LIMIT)
                         if cut == -1:
-                            cut = _last_whitespace(content[:_JUDGE_READ_LIMIT], 0)
+                            cut = content.rfind("\n", 0, _JUDGE_READ_LIMIT)
                         content = content[: cut + 1]
                     content = redact(content)
                 if truncated:
