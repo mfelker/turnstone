@@ -124,3 +124,49 @@ def test_late_llm_verdict_for_the_refused_call_gets_the_terminal_decision(web_ui
         web_ui.on_intent_verdict(late)
     print("late LLM verdict decision:", stamped)
     assert stamped.get("v-bash-llm") == "policy_denied"
+
+
+def _late_llm_decision(web_ui: WebUI, call_id: str, func_name: str) -> str | None:
+    """Deliver a late LLM verdict for *call_id*; return the decision it is stored with."""
+    stamped: dict[str, str] = {}
+
+    def single(verdict: dict[str, Any], **_kw: Any) -> None:
+        stamped.setdefault(verdict["verdict_id"], verdict.get("user_decision", "pending"))
+
+    def decide(pending: list[dict[str, Any]], decision: str, **_kw: Any) -> None:
+        for v in pending:
+            stamped[v["verdict_id"]] = decision
+
+    late = {
+        "verdict_id": f"{call_id}-llm",
+        "call_id": call_id,
+        "func_name": func_name,
+        "risk_level": "high",
+        "recommendation": "deny",
+        "confidence": 0.9,
+        "tier": "llm",
+    }
+    with (
+        patch.object(web_ui, "_persist_intent_verdict", side_effect=single),
+        patch.object(web_ui, "_persist_verdict_decisions", side_effect=decide),
+    ):
+        web_ui.on_intent_verdict(late)
+    return stamped.get(f"{call_id}-llm")
+
+
+def test_auto_approved_batch_maps_the_refused_sibling_for_late_verdicts(web_ui: WebUI):
+    """The auto-approve exit (blanket here) records the refusal too."""
+    web_ui.auto_approve = True
+    items = [_item("bash"), _item("write_file")]
+    (approved, _), final = _capture(web_ui, items, {"bash": "deny"}, person=False)
+    assert approved is True
+    assert final.get("v-bash") == "policy_denied"
+    assert _late_llm_decision(web_ui, "c-bash", "bash") == "policy_denied"
+
+
+def test_unreadable_policies_are_recorded_apart_from_a_deny_rule(web_ui: WebUI):
+    items = [_item("bash")]
+    (approved, _), final = _capture(web_ui, items, None, person=False)  # type: ignore[arg-type]
+    assert approved is False
+    assert final.get("v-bash") == "policy_unreadable"
+    assert _late_llm_decision(web_ui, "c-bash", "bash") == "policy_unreadable"

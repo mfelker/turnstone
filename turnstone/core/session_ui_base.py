@@ -261,8 +261,18 @@ def publish_gate_state(items: list[dict[str, Any]], state: str) -> None:
         publish(state)
 
 
-# Issue #1276 (prototype): terminal ``user_decision`` for a call a deny rule refused.
+# Issue #1276: terminal ``user_decision`` for a call a deny rule refused, and
+# for a call refused because the tool policies could not be read (no rule
+# matched it, so the audit trail keeps the two apart).
 POLICY_DENIED_DECISION = "policy_denied"
+POLICY_UNREADABLE_DECISION = "policy_unreadable"
+
+
+def _policy_refusal_decision(item: dict[str, Any]) -> str | None:
+    """The terminal decision for a call tool policy refused, else ``None``."""
+    if item.get("_refused_by") != "policy":
+        return None
+    return item.get("_policy_decision") or POLICY_DENIED_DECISION
 
 
 class ApprovalCycle:
@@ -2498,6 +2508,7 @@ class SessionUIBase:
                     it["denial_msg"] = POLICIES_UNREADABLE_DENIAL
                     # Private (the wire projection is an allowlist): no person rejected it.
                     it["_refused_by"] = "policy"
+                    it["_policy_decision"] = POLICY_UNREADABLE_DECISION
                 return _refuse_by_policy("Tool policies could not be read")
             still_pending = []
             for it in pending:
@@ -2624,8 +2635,10 @@ class SessionUIBase:
                 self._broadcast_activity()
                 # Populate the call_id → reason lookup before preparing the
                 # heuristic write so a racing LLM verdict observes the final
-                # decision.  Actual storage runs after admission.
+                # decision.  Actual storage runs after admission.  A sibling a
+                # deny rule refused needs its terminal decision mapped too.
                 self._record_auto_approves(items, deferred=auto_deferred)
+                self._record_policy_refusals(items)
                 self._persist_auto_approved_heuristic_verdicts(
                     items,
                     deferred=auto_deferred,
@@ -2662,10 +2675,10 @@ class SessionUIBase:
             heuristic_row.setdefault("resolver_principal_id", "")
             if item.get("auto_approved"):
                 heuristic_row["user_decision"] = item.get("auto_approve_reason", "") or "pending"
-            elif item.get("_refused_by") == "policy":
-                # Issue #1276 (prototype): a deny rule refused this call; no
-                # person decides it, so it never joins ``pending_verdicts``.
-                heuristic_row["user_decision"] = POLICY_DENIED_DECISION
+            elif refusal := _policy_refusal_decision(item):
+                # Issue #1276: tool policy refused this call; no person
+                # decides it, so it never joins ``pending_verdicts``.
+                heuristic_row["user_decision"] = refusal
             else:
                 heuristic_row["user_decision"] = "pending"
                 pending_verdicts.append(heuristic_row)
@@ -3739,17 +3752,13 @@ class SessionUIBase:
             return
         verdicts: list[dict[str, Any]] = []
         for it in items:
-            refused = it.get("_refused_by") == "policy"
-            if not it.get("auto_approved") and not refused:
+            refusal = _policy_refusal_decision(it)
+            if not it.get("auto_approved") and not refusal:
                 continue
             hv = it.get("_heuristic_verdict")
             if not hv:
                 continue
-            hv["user_decision"] = (
-                POLICY_DENIED_DECISION
-                if refused
-                else it.get("auto_approve_reason", "") or "pending"
-            )
+            hv["user_decision"] = refusal or it.get("auto_approve_reason", "") or "pending"
             row = dict(hv)
             row["execution_principal_id"] = str(it.get("_principal_id") or "").strip()
             row.setdefault("resolver_principal_id", "")
@@ -3767,17 +3776,46 @@ class SessionUIBase:
         else:
             deferred.append(_persist)
 
+    def _remember_terminal_decisions_locked(
+        self, decisions: list[tuple[str, str]], ts: float
+    ) -> None:
+        """Record call_id → terminal ``user_decision`` for late LLM verdicts.
+
+        Caller holds ``_ws_lock``.  Prunes expired entries first (lazy TTL
+        eviction) so a session with the LLM judge disabled doesn't accumulate
+        entries that will never be consumed.  Skips the rebuild when the map
+        is empty or all entries are still fresh — the common case on a
+        healthy LLM-judge-enabled session where entries drain via
+        ``on_intent_verdict.pop`` within the TTL.
+        """
+        cutoff = ts - self._AUTO_APPROVE_REASON_TTL
+        if self._auto_approve_reasons and any(
+            ins_ts < cutoff for _, ins_ts in self._auto_approve_reasons.values()
+        ):
+            self._auto_approve_reasons = {
+                cid: (reason, ins_ts)
+                for cid, (reason, ins_ts) in self._auto_approve_reasons.items()
+                if ins_ts >= cutoff
+            }
+        for cid, decision in decisions:
+            if cid:
+                self._auto_approve_reasons[cid] = (decision, ts)
+
     def _record_policy_refusals(self, items: list[dict[str, Any]]) -> None:
-        """Issue #1276 (prototype): map each policy-refused call id to its
-        terminal decision so a late LLM verdict is stamped ``policy_denied``
-        through the same lookup ``on_intent_verdict`` uses for auto-approve
-        reasons, instead of being parked for a person's decision."""
-        ts = time.time()
+        """Issue #1276: map each policy-refused call id to its terminal
+        decision (``policy_denied`` / ``policy_unreadable``) so a late LLM
+        verdict is stamped through the same lookup ``on_intent_verdict`` uses
+        for auto-approve reasons, instead of being parked for a person's
+        decision."""
+        refusals = [
+            (it.get("call_id", ""), decision)
+            for it in items
+            if (decision := _policy_refusal_decision(it))
+        ]
+        if not refusals:
+            return
         with self._ws_lock:
-            for it in items:
-                cid = it.get("call_id", "")
-                if cid and it.get("_refused_by") == "policy":
-                    self._auto_approve_reasons[cid] = (POLICY_DENIED_DECISION, ts)
+            self._remember_terminal_decisions_locked(refusals, time.time())
 
     def _record_auto_approves(
         self,
@@ -3824,29 +3862,11 @@ class SessionUIBase:
             # Mirror call_id → reason into the lookup map so a late
             # ``on_intent_verdict`` (LLM judge tier) can stamp the
             # right ``user_decision`` instead of leaving the verdict
-            # stuck as ``"pending"`` forever.  Prune expired entries
-            # first (lazy TTL eviction) so a session with the LLM
-            # judge disabled doesn't accumulate entries that will
-            # never be consumed.  Skip the rebuild when the map is
-            # empty or all entries are still fresh — the common case
-            # on a healthy LLM-judge-enabled session where entries
-            # drain via ``on_intent_verdict.pop`` within the TTL.
-            cutoff = ts - self._AUTO_APPROVE_REASON_TTL
-            if self._auto_approve_reasons and any(
-                ins_ts < cutoff for _, ins_ts in self._auto_approve_reasons.values()
-            ):
-                self._auto_approve_reasons = {
-                    cid: (reason, ins_ts)
-                    for cid, (reason, ins_ts) in self._auto_approve_reasons.items()
-                    if ins_ts >= cutoff
-                }
-            for entry in appended:
-                cid = entry["call_id"]
-                if cid:
-                    self._auto_approve_reasons[cid] = (
-                        entry["auto_approve_reason"],
-                        ts,
-                    )
+            # stuck as ``"pending"`` forever.
+            self._remember_terminal_decisions_locked(
+                [(entry["call_id"], entry["auto_approve_reason"]) for entry in appended],
+                ts,
+            )
         # Audit emission — one row per ``approve_tools`` call (not one
         # per item) keeps the audit table from blowing up on tool-heavy turns
         # while still capturing every tool name + reason.  The approval gate
