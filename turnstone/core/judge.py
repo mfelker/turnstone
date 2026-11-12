@@ -1964,6 +1964,13 @@ class IntentJudge:
                         tc_args = {}
 
                     tool_result = self._exec_read_only_tool(tc_name, tc_args)
+                    if self._config.redact_secrets:
+                        # Issue #1297 (prototype of the proposed fix): the
+                        # evidence the judge gathers itself gets the same
+                        # credential redaction as the session's tool output.
+                        from turnstone.core.output_guard import redact_credentials
+
+                        tool_result = redact_credentials(tool_result)
                     judge_turns.append(Turn.tool(tc.get("id", ""), tool_result))
                 turn += 1
                 continue
