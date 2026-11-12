@@ -19,9 +19,9 @@ The separate `dev` branch is retired. See [the release process](docs/releasing.m
   judge's summary, reasoning and evidence lines, were shown as received. They now
   go through the same treatment as a command line: a credential is replaced with
   a redaction marker and a control character appears as a visible symbol. This
-  covers the tool cards, the approval prompts, the "Always approve" labels, the
-  announcements read to a screen reader and the late-verdict notice, in both the
-  workstream and the coordinator panes.
+  covers the tool cards, the approval prompts, the "Always approve" labels and
+  the announcements read to a screen reader, in both the workstream and the
+  coordinator panes, and, in the workstream pane, the late-verdict notice.
 
 ## [2026-11-11]
 
