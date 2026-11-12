@@ -371,6 +371,38 @@ for (const code of all) {
     )
 
 
+def test_bidi_marker_is_not_cut_at_the_display_cap() -> None:
+    """A cut at the display cap never leaves half a marker; text without
+    markers is cut where it always was; a nested string value shows one
+    marker, once."""
+    _builders(
+        r"""
+const RLO = String.fromCharCode(0x202e);
+const CAP = 64 * 1024;
+const NOTE = '\n… (';
+const headOf = command => {
+  const value = args(open(row('bash', JSON.stringify({command}))))[0][1];
+  const at = value.indexOf(NOTE);
+  assert(at !== -1, 'the value is cut: ' + value.length);
+  return value.slice(0, at);
+};
+// Each start puts a different part of the 8-character marker across the cap.
+for (const gap of [1, 2, 3, 4, 5, 6, 7]) {
+  const head = headOf('a'.repeat(CAP - gap) + RLO + 'b'.repeat(40));
+  assert(head === 'a'.repeat(CAP - gap), 'gap ' + gap + ' ends before the marker: ' + JSON.stringify(head.slice(-12)));
+}
+const whole = headOf('a'.repeat(CAP - 8) + RLO + 'b'.repeat(40));
+assert(whole === 'a'.repeat(CAP - 8) + '⟨U+202E⟩', 'a marker that ends at the cap stays whole');
+const plain = headOf('a'.repeat(CAP + 500));
+assert(plain === 'a'.repeat(CAP), 'text without markers is cut at the cap');
+
+const nested = args(open(row('bash', JSON.stringify({a: {b: 'x' + RLO + 'y'}}))))[0][1];
+assert(nested.split('⟨U+202E⟩').length === 2, 'a nested value shows one marker: ' + JSON.stringify(nested));
+assert(nested.includes('"b": "x⟨U+202E⟩y"') && !nested.includes(RLO), 'once, with no raw override: ' + JSON.stringify(nested));
+"""
+    )
+
+
 def _child_approval_block(scenario: str) -> None:
     """Run *scenario* with the coordinator's children-tree approval block: its
     real renderers, beside the shared builders they import."""

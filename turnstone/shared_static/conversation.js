@@ -50,9 +50,8 @@ function _showControls(text) {
     (c) => {
       const code = c.charCodeAt(0);
       if (code > 0x7f) {
-        return (
-          "\u27e8U+" + code.toString(16).toUpperCase().padStart(4, "0") + "\u27e9"
-        );
+        const hex = code.toString(16).toUpperCase().padStart(4, "0");
+        return "\u27e8U+" + hex + "\u27e9";
       }
       return String.fromCharCode(c === "\x7f" ? 0x2421 : 0x2400 + code);
     },
@@ -1414,8 +1413,15 @@ function _redactedHead(text) {
 function _displayCut(text, total) {
   const length = total == null ? text.length : total;
   if (length <= RAW_CAP) return text;
+  // A cut inside a shown bidi control's marker (U+27E8 "U+XXXX" U+27E9, 8
+  // characters) backs up to just before the marker.
+  let cut = RAW_CAP;
+  const partial = /\u27e8(?:U(?:\+[0-9A-F]{0,4})?)?$/.exec(
+    text.slice(Math.max(0, cut - 7), cut),
+  );
+  if (partial) cut -= partial[0].length;
   return (
-    text.slice(0, RAW_CAP) +
+    text.slice(0, cut) +
     "\n… (" +
     length.toLocaleString() +
     " chars total — truncated for display)"

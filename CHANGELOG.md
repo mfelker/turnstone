@@ -10,6 +10,17 @@ All development now integrates on `main`. Supported release lines are maintained
 on `stable/X.Y` branches; `stable/1.8` preserves the former stable branch.
 The separate `dev` branch is retired. See [the release process](docs/releasing.md).
 
+## [2026-11-12]
+
+### Security
+
+- **Bidirectional control characters in a tool call now show as code points on
+  approval cards.** A command, preview or argument could carry a right-to-left
+  override or isolate that reordered the text the operator read before
+  approving. The call line, preview, approval block and full-call view now show
+  each such character as a marker like `⟨U+202E⟩`, including in nested
+  argument names, as they already did for ASCII control characters.
+
 ## [2026-11-11]
 
 ### Fixed
