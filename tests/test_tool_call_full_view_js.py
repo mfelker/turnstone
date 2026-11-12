@@ -625,6 +625,12 @@ assert(unclosed.children.at(-1).textContent.includes('truncated for display'), '
 assert(!unclosed.children.at(-1).textContent.includes('CUTOFFKEYBODY'), 'a key the window left open never shows');
 conv.convResultExpandControl(unclosed).click();
 assert(!unclosed.children.at(-1).textContent.includes('CUTOFFKEYBODY'), 'as show all never shows it');
+// A cut-off key with no later BEGIN anywhere is redacted as a key-shaped run.
+const lone = conv.buildConvResult('x'.repeat(60 * 1024) + '-----BEGIN RSA PRIVATE KEY-----\n'
+  + 'MIIEowLONECUTOFFBODY' + 'A'.repeat(44) + '\n' + 'tail\n'.repeat(20000), {});
+assert(!lone.children.at(-1).textContent.includes('LONECUTOFFBODY'), 'a lone cut-off key never shows');
+conv.convResultExpandControl(lone).click();
+assert(!lone.children.at(-1).textContent.includes('LONECUTOFFBODY'), 'nor when shown in full');
 const plain = conv.buildConvResult('x'.repeat(70 * 1024), {}).children.at(-1).textContent;
 assert(plain.indexOf('\n…') === 64 * 1024, 'plain text past the cut keeps its whole head');
 """

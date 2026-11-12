@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+from tests._cut_off_key_cases import MARK, NEGATIVE, POSITIVE
 from turnstone.core.output_guard import (
     JUDGE_FALLBACK_SYMBOL,
     JUDGE_SYMBOLS,
@@ -470,6 +471,9 @@ class TestJwtAndQueryCredentials:
         assert r.sanitized is None
 
 
+_PK_BEGIN = "-----BEGIN PRIVATE KEY-----\n"
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
@@ -487,6 +491,12 @@ class TestJwtAndQueryCredentials:
             "-----BEGIN PRIVATE KEY-----\n" * 12_000,
             "[REDACTED:private_key]" * 11_999 + "-----BEGIN PRIVATE KEY-----\n",
         ),
+        # A BEGIN with no END or later BEGIN, then a long run of key-shaped lines.
+        (_PK_BEGIN + ("A" * 64 + "\n") * 5000, "[REDACTED:private_key]\n"),
+        (_PK_BEGIN + "A" * 320_000 + " x", None),
+        (_PK_BEGIN + "\r\n" * 160_000, None),
+        (_PK_BEGIN + "\\n" * 160_000, None),
+        (_PK_BEGIN + "Proc-Type: 4,ENCRYPTED\n" * 14_000, None),
     ],
     ids=[
         "run",
@@ -499,6 +509,11 @@ class TestJwtAndQueryCredentials:
         "short-postgres-schemes",
         "env-key-run",
         "unterminated-keys",
+        "key-shaped-lines",
+        "base64-run-then-prose",
+        "blank-lines",
+        "escaped-newlines",
+        "header-lines",
     ],
 )
 def test_redaction_is_linear_in_a_long_run(text, expected) -> None:
@@ -547,6 +562,7 @@ def test_a_cut_off_private_key_runs_to_the_next_begin() -> None:
     # after it is left as it is.
     key = "-----BEGIN PRIVATE KEY-----\nMIIEvQ\n-----END PRIVATE KEY-----"
     cert = "-----BEGIN CERTIFICATE-----\nMIIC\n-----END CERTIFICATE-----"
+    # "MIIEow cut off" has spaces, so it is not key-shaped and stays as written.
     unterminated = "-----BEGIN RSA PRIVATE KEY-----\nMIIEow cut off\n"
     redacted = redact_credentials("log\n" + unterminated + key + "\ndone")
     assert redacted == "log\n[REDACTED:private_key][REDACTED:private_key]\ndone"
@@ -555,6 +571,33 @@ def test_a_cut_off_private_key_runs_to_the_next_begin() -> None:
     assert "private_key_leak" in r.flags
     assert r.sanitized == "[REDACTED:private_key]" + cert
     assert redact_credentials(unterminated) == unterminated
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"), [c[1:] for c in POSITIVE], ids=[c[0] for c in POSITIVE]
+)
+def test_a_cut_off_private_key_with_no_end_is_redacted(text, expected) -> None:
+    # No END and no later BEGIN: the run of key-shaped lines after the BEGIN
+    # goes, and the first line that is not key-shaped (and all after it) stays.
+    assert redact_credentials(text) == expected
+    assert expected.count(MARK) == 1
+    r = evaluate_output(text)
+    assert "private_key_leak" in r.flags
+    assert r.sanitized == expected
+    configured = evaluate_output(text, patterns=_builtin_registry_patterns())
+    assert "private_key_leak" in configured.flags
+    assert configured.sanitized == expected
+
+
+@pytest.mark.parametrize(("text",), [c[1:] for c in NEGATIVE], ids=[c[0] for c in NEGATIVE])
+def test_a_begin_that_is_not_followed_by_key_lines_is_left_alone(text) -> None:
+    assert redact_credentials(text) == text
+    r = evaluate_output(text)
+    assert "private_key_leak" not in r.flags
+    assert r.sanitized is None
+    configured = evaluate_output(text, patterns=_builtin_registry_patterns())
+    assert "private_key_leak" not in configured.flags
+    assert configured.sanitized is None
 
 
 @pytest.mark.parametrize(

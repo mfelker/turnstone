@@ -87,12 +87,33 @@ _RE_CAMO_CAPS_ACTION = re.compile(
 # the next BEGIN, so a cut-off key before a whole one goes with it.  The body
 # never scans past a BEGIN: scanning on to the next END made every BEGIN in
 # text with no END rescan the rest of it, which was quadratic (9 seconds for
-# 320 KB of BEGIN lines).  A BEGIN with neither after it stays as written.
+# 320 KB of BEGIN lines).  A BEGIN with neither after it ends, as a last
+# resort, after a run of key-shaped lines (_PK_TAIL): optional "Name: value"
+# headers, an optional blank line, then lines of at least 16 base64
+# characters (up to two "=") and at most one shorter final line (a mid-line
+# cap).  The run stops at the first line that is not key-shaped and need not
+# reach the end of the text; a BEGIN followed by prose stays as written.  A
+# line ends at a real or JSON-escaped newline, a quote (lookahead, not
+# consumed) or the end of the text.
+# Engine parity: redact_credentials.js builds the same pattern from the same
+# fragments.  Both use only syntax the two engines read alike: (?![\s\S]) for
+# the end of text (never $, \Z or \A), [ \t] rather than \s in the new parts,
+# no possessive or atomic groups, no inline flags and no new capture groups.
 _PRIVATE_KEY_LABEL = r"(?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED|PGP)\s+)?PRIVATE\s+KEY(?:\s+BLOCK)?"
+_PK_NL = r"(?:\r?\n|(?:\\r)?\\n)"
+_PK_EOT = r"(?![\s\S])"
+_PK_LINE_END = r"[ \t]*(?=" + _PK_NL + r"|" + _PK_EOT + r"|[\"'])"
+_PK_HEADER = _PK_NL + r"[ \t]*[A-Za-z][A-Za-z0-9-]*:[^\r\n\\\"']*"
+_PK_TAIL = (
+    r"[ \t]*(?:" + _PK_HEADER + r")*(?:" + _PK_NL + r"[ \t]*)?"
+    r"(?:" + _PK_NL + r"[ \t]*[A-Za-z0-9+/]{16,}={0,2}" + _PK_LINE_END + r")+"
+    r"(?:" + _PK_NL + r"[ \t]*[A-Za-z0-9+/]{1,15}={0,2}" + _PK_LINE_END + r")?"
+)
 _RE_PRIVATE_KEY_BLOCK = re.compile(
     r"-----BEGIN\s+" + _PRIVATE_KEY_LABEL + r"-----"
-    r"(?:(?!-----BEGIN)[\s\S])*?"
-    r"(?:-----END\s+" + _PRIVATE_KEY_LABEL + r"-----|(?=-----BEGIN))",
+    r"(?:(?:(?!-----BEGIN)[\s\S])*?"
+    r"(?:-----END\s+" + _PRIVATE_KEY_LABEL + r"-----|(?=-----BEGIN))"
+    r"|" + _PK_TAIL + r")",
 )
 # Database connection strings AND http(s) URLs that carry RFC-3986
 # userinfo (``user:pass@host``).  Adding http(s) here means a

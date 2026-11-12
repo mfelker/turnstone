@@ -33,11 +33,31 @@
 // the next BEGIN, so a cut-off key before a whole one goes with it.  The body
 // never scans past a BEGIN: scanning on to the next END made every BEGIN in
 // text with no END rescan the rest of it (quadratic).  A BEGIN with neither
-// after it stays as written.
+// after it ends, as a last resort, after a run of key-shaped lines
+// (_PK_TAIL): optional "Name: value" headers, an optional blank line, then
+// lines of at least 16 base64 characters (up to two "=") and at most one
+// shorter final line (a mid-line cap).  The run stops at the first line that
+// is not key-shaped and need not reach the end of the text; a BEGIN followed
+// by prose stays as written.  A line ends at a real or JSON-escaped newline,
+// a quote (lookahead, not consumed) or the end of the text.
+// Engine parity: output_guard.py builds the same pattern from the same
+// fragments.  Both use only syntax the two engines read alike: (?![\s\S]) for
+// the end of text (never $, \Z or \A), [ \t] rather than \s in the new parts,
+// no possessive or atomic groups, no inline flags and no new capture groups.
 const _PRIVATE_KEY_LABEL = String.raw`(?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED|PGP)\s+)?PRIVATE\s+KEY(?:\s+BLOCK)?`;
+const _PK_NL = String.raw`(?:\r?\n|(?:\\r)?\\n)`;
+const _PK_EOT = String.raw`(?![\s\S])`;
+const _PK_LINE_END = String.raw`[ \t]*(?=${_PK_NL}|${_PK_EOT}|["'])`;
+const _PK_HEADER = String.raw`${_PK_NL}[ \t]*[A-Za-z][A-Za-z0-9-]*:[^\r\n\\"']*`;
+const _PK_TAIL =
+  String.raw`[ \t]*(?:${_PK_HEADER})*(?:${_PK_NL}[ \t]*)?` +
+  String.raw`(?:${_PK_NL}[ \t]*[A-Za-z0-9+/]{16,}={0,2}${_PK_LINE_END})+` +
+  String.raw`(?:${_PK_NL}[ \t]*[A-Za-z0-9+/]{1,15}={0,2}${_PK_LINE_END})?`;
 const _RE_PRIVATE_KEY_BLOCK = new RegExp(
-  String.raw`-----BEGIN\s+${_PRIVATE_KEY_LABEL}-----(?:(?!-----BEGIN)[\s\S])*?` +
-    String.raw`(?:-----END\s+${_PRIVATE_KEY_LABEL}-----|(?=-----BEGIN))`,
+  String.raw`-----BEGIN\s+${_PRIVATE_KEY_LABEL}-----` +
+    String.raw`(?:(?:(?!-----BEGIN)[\s\S])*?` +
+    String.raw`(?:-----END\s+${_PRIVATE_KEY_LABEL}-----|(?=-----BEGIN))` +
+    String.raw`|${_PK_TAIL})`,
   "g",
 );
 const _RE_PRIVATE_KEY_BEGIN = new RegExp(
@@ -319,7 +339,8 @@ export function redactNamedValue(key, value) {
 /**
  * Where the first private-key BEGIN line in `text` starts, or -1.  In text
  * redactCredentials has been over, one that remains is a block with neither
- * its END nor another BEGIN after it, which may run on past the text's end.
+ * its END, another BEGIN nor a run of key-shaped lines after it (so not a
+ * cut-off key), and it may run on past the text's end.
  *
  * @param {string} text - Text to search
  * @returns {number} The index of the BEGIN line, or -1

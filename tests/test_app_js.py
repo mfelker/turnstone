@@ -1563,6 +1563,32 @@ def test_swept_bundle_has_no_const_reassign(bundle: Path) -> None:
         )
 
 
+def test_redact_credentials_cut_off_keys_match_python() -> None:
+    """The JS and Python redactors give byte-identical output on cut-off keys (#1555)."""
+    from tests._cut_off_key_cases import NEGATIVE, POSITIVE
+    from turnstone.core.output_guard import redact_credentials as py_redact
+
+    cases = [c[1] for c in POSITIVE] + [c[1] for c in NEGATIVE]
+    cases += [
+        "-----BEGIN PRIVATE KEY-----\n" + "A" * 16,
+        "-----BEGIN PRIVATE KEY-----\n" + "A" * 15 + "\n" + "A" * 16,
+        "-----BEGIN PRIVATE KEY-----\nAAAAAAAAAAAAAAAA==\nAAAA=\nAAAA\n",
+        "'-----BEGIN PRIVATE KEY-----\\nAAAAAAAAAAAAAAAA\\n'",
+        "-----BEGIN PRIVATE KEY-----  \n\nAAAAAAAAAAAAAAAA\n",
+    ]
+    mod_path = _REDACT_CREDENTIALS_JS.resolve()
+    harness = (
+        "import { redactCredentials } from "
+        + json.dumps(str(mod_path))
+        + ";\nconst cases = "
+        + json.dumps(cases)
+        + ";\nconsole.log(JSON.stringify(cases.map(redactCredentials)));\n"
+    )
+    proc = run_node_source(harness)
+    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert json.loads(proc.stdout) == [py_redact(c) for c in cases]
+
+
 def test_redact_credentials_runtime_smoke() -> None:
     """Runtime smoke for ``redactCredentials`` via a temp harness file.
     The function is pure (no DOM dependency).  Tests the shared module
@@ -1729,6 +1755,20 @@ def test_redact_credentials_runtime_smoke() -> None:
         + "const begin = '-----BEGIN PRIVATE KEY-----\\n';\n"
         + "for (const [label, slow, want] of [['env-line', 'x=' + 'A'.repeat(320000), null],\n"
         + "    ['private-key', begin.repeat(48000), '[REDACTED:private_key]'.repeat(47999) + begin]]) {\n"
+        + "  const t = Date.now();\n"
+        + "  if (redactCredentials(slow) !== (want === null ? slow : want)) "
+        + "throw new Error(label + ' run altered');\n"
+        + "  if (Date.now() - t > 2000) "
+        + "throw new Error(label + ' scan is not linear: ' + (Date.now() - t) + 'ms');\n"
+        + "}\n"
+        + "// A BEGIN with no END or later BEGIN, then 320 KB that is or is not key-shaped\n"
+        + "const pk = '-----BEGIN PRIVATE KEY-----\\n';\n"
+        + "for (const [label, slow, want] of [\n"
+        + "    ['key-shaped-lines', pk + ('A'.repeat(64) + '\\n').repeat(5000), '[REDACTED:private_key]\\n'],\n"
+        + "    ['base64-run-then-prose', pk + 'A'.repeat(320000) + ' x', null],\n"
+        + "    ['blank-lines', pk + '\\r\\n'.repeat(160000), null],\n"
+        + "    ['escaped-newlines', pk + '\\\\n'.repeat(160000), null],\n"
+        + "    ['header-lines', pk + 'Proc-Type: 4,ENCRYPTED\\n'.repeat(14000), null]]) {\n"
         + "  const t = Date.now();\n"
         + "  if (redactCredentials(slow) !== (want === null ? slow : want)) "
         + "throw new Error(label + ' run altered');\n"

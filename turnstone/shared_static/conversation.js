@@ -1383,8 +1383,9 @@ const REDACT_WINDOW = 16 * 1024;
 // window's own end runs through is left as it is, at the very end of the
 // redacted window and shorter than REDACT_WINDOW, so the window's last
 // REDACT_WINDOW characters never show, however much earlier redactions
-// shortened it; and a private-key block still open in the window (neither its
-// END nor another BEGIN in it) may close past it, where show all redacts it,
+// shortened it; and a private-key block still open in the window (a BEGIN that
+// survived redaction: no END, no later BEGIN and not key-shaped after it) may
+// close past it, where show all redacts it,
 // so the head stops before it.
 function _redactedHead(text) {
   const head = redactCredentials(text.slice(0, RAW_CAP + REDACT_WINDOW));
