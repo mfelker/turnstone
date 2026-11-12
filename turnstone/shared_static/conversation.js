@@ -905,7 +905,7 @@ export function buildConvRow(item, opts) {
   }
   const name = document.createElement("span");
   name.className = "conv-row-name";
-  name.textContent = item.func_name || "(unknown tool)";
+  name.textContent = convShownText(item.func_name).text || "(unknown tool)";
   if (item.auto_approved) {
     const auto = document.createElement("span");
     auto.className = "conv-row-auto";
@@ -1102,13 +1102,13 @@ export function buildConvVerdict(verdict, opts) {
     if (verdict.intent_summary) {
       const s = document.createElement("div");
       s.className = "conv-verdict-summary";
-      s.textContent = verdict.intent_summary;
+      s.textContent = convShownText(verdict.intent_summary).text;
       detail.appendChild(s);
     }
     if (verdict.reasoning) {
       const r = document.createElement("div");
       r.className = "conv-verdict-reasoning";
-      r.textContent = verdict.reasoning;
+      r.textContent = convShownText(verdict.reasoning).text;
       detail.appendChild(r);
     }
     const evidence = verdict.evidence || [];
@@ -1117,7 +1117,7 @@ export function buildConvVerdict(verdict, opts) {
       ev.className = "conv-verdict-evidence";
       for (const e of evidence) {
         const erow = document.createElement("div");
-        erow.textContent = "• " + e;
+        erow.textContent = "• " + convShownText(e).text;
         ev.appendChild(erow);
       }
       detail.appendChild(ev);
@@ -1205,7 +1205,7 @@ export function buildConvWarning(assessment) {
   if (a.reasoning) {
     const r = document.createElement("div");
     r.className = "conv-warning-reasoning";
-    r.textContent = a.reasoning;
+    r.textContent = convShownText(a.reasoning).text;
     chip.appendChild(r);
   }
   return chip;
@@ -1487,7 +1487,7 @@ export function attachConvFullCall(row, argumentsText) {
   toggle.type = "button";
   toggle.className = "conv-row-full-toggle";
   toggle.setAttribute("aria-expanded", "false");
-  const name = row.dataset.toolName;
+  const name = convShownText(row.dataset.toolName).text;
   toggle.setAttribute("aria-label", name ? "Full call: " + name : "Full call");
   // Its caret is CSS (::before), turned while the call is closed.
   toggle.textContent = "full call";

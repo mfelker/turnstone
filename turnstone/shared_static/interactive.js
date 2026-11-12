@@ -40,6 +40,7 @@ import {
   buildConvVerdict,
   buildConvWarning,
   buildConvActions,
+  convShownText,
   buildConvStatus,
   buildAgentCardBody,
   formatAgentContextTokens,
@@ -162,7 +163,9 @@ function toolAnnounce(msg) {
 // the fact it's being judged and can be stopped.  Empty string when there are
 // no named tools (toolAnnounce then no-ops).
 function _toolAnnounceText(items) {
-  const names = (items || []).map((it) => it && it.func_name).filter(Boolean);
+  const names = (items || [])
+    .map((it) => it && it.func_name && convShownText(it.func_name).text)
+    .filter(Boolean);
   if (!names.length) return "";
   const n = names.length;
   const shown = names.slice(0, 3).join(", ");
@@ -857,7 +860,7 @@ class Pane {
         // late-arriving verdict so the user still sees it.
         const conf = Math.round((verdict.confidence || 0) * 100);
         const rec = verdict.recommendation || "review";
-        const func = verdict.func_name || "";
+        const func = convShownText(verdict.func_name).text;
         showToast(
           "Judge verdict for " + func + ": " + rec + " (" + conf + "%)",
           rec === "approve" ? "success" : rec === "deny" ? "error" : "warn",
@@ -3130,7 +3133,7 @@ class Pane {
       const actions = buildConvActions({
         kbd: { approve: "y", deny: "n", always: "a" },
         alwaysLabel: alwaysNames.length
-          ? "Always approve " + alwaysNames.join(", ")
+          ? "Always approve " + convShownText(alwaysNames.join(", ")).text
           : "",
         glowRec,
         withFeedback: true,
@@ -4609,7 +4612,7 @@ function _convApprovalHead(kickerText, items) {
   head.appendChild(k);
   const first =
     items[0] && (items[0].func_name || items[0].approval_label)
-      ? items[0].func_name || items[0].approval_label
+      ? convShownText(items[0].func_name || items[0].approval_label).text
       : "tool";
   const summary = document.createElement("span");
   summary.className = "conv-batch-summary";

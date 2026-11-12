@@ -687,7 +687,9 @@ function createCoordinatorPane(root, wsId, opts) {
   // Terse SR summary for a committed tool batch: tool name(s) (capped at 3)
   // + that it's being judged and can be stopped.  "" when nothing is named.
   function _toolAnnounceText(items) {
-    const names = (items || []).map((it) => it && it.func_name).filter(Boolean);
+    const names = (items || [])
+      .map((it) => it && it.func_name && convShownText(it.func_name).text)
+      .filter(Boolean);
     if (!names.length) return "";
     const n = names.length;
     const shown = names.slice(0, 3).join(", ");
@@ -1739,7 +1741,7 @@ function createCoordinatorPane(root, wsId, opts) {
     if (callLine && item.error && !item.needs_approval) {
       const errPill = document.createElement("span");
       errPill.className = "conv-row-status conv-row-status--error";
-      errPill.textContent = "✗ " + (item.error || "blocked");
+      errPill.textContent = "✗ " + (convShownText(item.error).text || "blocked");
       // Ahead of "full call", which keeps the line's right edge.
       callLine.insertBefore(
         errPill,
@@ -1979,8 +1981,9 @@ function createCoordinatorPane(root, wsId, opts) {
   // cleanly through a SR without revealing every nested arg.
   function _approvalAriaLabel(items) {
     const first =
-      (items && items[0] && (items[0].func_name || items[0].approval_label)) ||
-      "tool";
+      convShownText(
+        items && items[0] && (items[0].func_name || items[0].approval_label),
+      ).text || "tool";
     const rest = items.length > 1 ? " + " + (items.length - 1) + " more" : "";
     return "Approval required: " + first + rest;
   }
@@ -1998,7 +2001,7 @@ function createCoordinatorPane(root, wsId, opts) {
       .filter((it) => it.needs_approval && it.func_name && !it.error)
       .map((it) => it.approval_label || it.func_name);
     const alwaysLabel = alwaysNames.length
-      ? "Always approve " + alwaysNames.join(", ")
+      ? "Always approve " + convShownText(alwaysNames.join(", ")).text
       : "";
     return buildConvActions({
       kbd: { approve: "⏎", deny: "D", always: "⇧A" },
@@ -2387,7 +2390,7 @@ function createCoordinatorPane(root, wsId, opts) {
     }
     const firstName =
       items[0] && (items[0].func_name || items[0].approval_label)
-        ? items[0].func_name || items[0].approval_label
+        ? convShownText(items[0].func_name || items[0].approval_label).text
         : "tool";
     const summaryText =
       items.length >= 2
@@ -3934,7 +3937,7 @@ function createCoordinatorPane(root, wsId, opts) {
       }
     }
     const names = entries
-      .map((e) => (e && (e.approval_label || e.func_name)) || "")
+      .map((e) => convShownText(e && (e.approval_label || e.func_name)).text)
       .filter(Boolean);
     const visible = names.slice(0, 3).join(", ");
     const more = names.length > 3 ? " +" + (names.length - 3) : "";
@@ -3949,7 +3952,9 @@ function createCoordinatorPane(root, wsId, opts) {
     // approval can be told apart from the skill-template baseline.
     const tooltip = entries
       .map((e) => {
-        const name = (e && (e.approval_label || e.func_name)) || "(unknown)";
+        const name =
+          convShownText(e && (e.approval_label || e.func_name)).text ||
+          "(unknown)";
         const reason = _normaliseAutoApproveReason(e && e.auto_approve_reason);
         const ts =
           e && typeof e.ts === "number"
@@ -3988,7 +3993,8 @@ function createCoordinatorPane(root, wsId, opts) {
     head.className = "approval-sub-head";
     const name = document.createElement("span");
     name.className = "approval-tool";
-    name.textContent = item.func_name || item.approval_label || "(tool)";
+    name.textContent =
+      convShownText(item.func_name || item.approval_label).text || "(tool)";
     head.appendChild(name);
     const v = item.judge_verdict || item.heuristic_verdict;
     if (v) {
@@ -4153,7 +4159,9 @@ function createCoordinatorPane(root, wsId, opts) {
     // Tool-name summary \u2014 first item, plus "+ N more" for envelopes.
     const toolName = document.createElement("span");
     toolName.className = "approval-tool";
-    const baseName = primary.func_name || primary.approval_label || "(tool)";
+    const baseName =
+      convShownText(primary.func_name || primary.approval_label).text ||
+      "(tool)";
     toolName.textContent =
       items.length > 1
         ? baseName + " + " + (items.length - 1) + " more"

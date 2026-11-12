@@ -875,6 +875,52 @@ if (!shown.includes("LOW")) throw new Error("risk missing: " + shown);
     assert "innerHTML" not in builder
 
 
+@node_skip
+def test_verdict_and_warning_prose_is_redacted_and_shows_controls() -> None:
+    """A verdict's prose quotes what the model wrote, so the cards treat it as
+    they treat a command: credentials redacted, control characters as symbols."""
+    script = (
+        FAKE_DOM
+        + f"""
+document.createTextNode = text => Object.assign(new FakeElement('text'), {{textContent: text}});
+document.createDocumentFragment = () => new FakeElement('fragment');
+const makeElement = document.createElement.bind(document);
+document.createElement = tag => Object.assign(makeElement(tag), {{style: {{}}}});
+const conv = await import({json.dumps(_CONVERSATION_JS.as_uri())});
+const read = el => el.textContent + el.children.map(read).join("");
+const ch = code => String.fromCharCode(code);
+const key = "sk-" + "a".repeat(30);
+const check = (label, shown, symbol) => {{
+  if (!shown.includes("[REDACTED:")) throw new Error(label + ": key not redacted: " + shown);
+  if (shown.includes(key)) throw new Error(label + ": raw key shown: " + shown);
+  if (!shown.includes(ch(symbol))) throw new Error(label + ": control symbol missing: " + shown);
+  if ([...shown].some(c => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)) throw new Error(label + ": raw control shown: " + shown);
+}};
+const frag = conv.buildConvVerdict({{
+  risk_level: "high", recommendation: "review",
+  intent_summary: "runs " + key + ch(13) + "next",
+  reasoning: "because " + key + ch(27) + "[2K",
+  evidence: ["quoted " + key + ch(27) + "[1A"],
+}});
+const walk = el => [el].concat(el.children.flatMap(walk));
+const pick = cls => frag.children.flatMap(walk).find(el => el.className === cls);
+check("summary", read(pick("conv-verdict-summary")), 0x240d);
+check("reasoning", read(pick("conv-verdict-reasoning")), 0x241b);
+check("evidence", read(pick("conv-verdict-evidence")), 0x241b);
+if (!read(pick("conv-verdict-evidence")).startsWith("\u2022 ")) throw new Error("bullet lost");
+const chip = conv.buildConvWarning({{risk_level: "low", reasoning: "saw " + key + ch(27) + "[2K"}});
+check("warning", read(chip), 0x241b);
+"""
+    )
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_approve_all_label_unified() -> None:
     """Button language (BRIEFING): the persistent action reads 'Approve all'
     (a dashed --ok ghost), NOT the coordinator's old 'Always'.  The trio is

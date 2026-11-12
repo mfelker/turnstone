@@ -317,6 +317,34 @@ assert(summary.querySelector('.conv-row-args').textContent === '⚙ bash: true '
     )
 
 
+def test_a_tool_name_shows_as_the_cards_show_text() -> None:
+    """A model-written tool name (an MCP or unknown tool) is set on the card and
+    in the full-call control's label with its control characters shown; the
+    identifier a pane matches on stays as received."""
+    _builders(
+        r"""
+const ch = code => String.fromCharCode(code);
+const ESC = ch(27);
+const raw = 'mcp__x' + ESC + '[2K';
+const el = conv.buildConvRow({func_name: raw, call_id: 'c-esc'});
+html.appendChild(el);
+const name = el.querySelector('.conv-row-name').textContent;
+assert(name === 'mcp__x' + ch(0x241b) + '[2K', 'the name shows the symbol: ' + JSON.stringify(name));
+assert(!name.includes(ESC), 'and no raw escape');
+assert(el.dataset.toolName === raw, 'the identifier stays as received');
+assert(!el.querySelector('.conv-redaction-note'), 'a name adds no redaction note');
+const keyed = conv.buildConvRow({func_name: 'sk-' + 'a'.repeat(30), call_id: 'c-key'});
+assert(keyed.querySelector('.conv-row-name').textContent.includes('[REDACTED:'), 'a key in a name is redacted');
+assert(!keyed.querySelector('.conv-redaction-note'), 'and still adds no note');
+const missing = conv.buildConvRow({call_id: 'c-none'});
+assert(missing.querySelector('.conv-row-name').textContent === '(unknown tool)', 'no name still reads (unknown tool)');
+conv.attachConvFullCall(el, JSON.stringify({a: 1}));
+const label = el.querySelector('.conv-row-full-toggle').getAttribute('aria-label');
+assert(label === 'Full call: mcp__x' + ch(0x241b) + '[2K', 'the control is named with the symbol: ' + JSON.stringify(label));
+"""
+    )
+
+
 def _child_approval_block(scenario: str) -> None:
     """Run *scenario* with the coordinator's children-tree approval block: its
     real renderers, beside the shared builders they import."""
@@ -430,6 +458,53 @@ const banner = block.querySelector('.approval-policy-block').textContent;
 assert(!banner.includes(key) && !banner.includes(ESC) && banner.includes(ch(0x241b) + '[2J'),
   'the policy banner is redacted and shows its controls: ' + JSON.stringify(banner));
 """
+    )
+
+
+def test_child_approval_block_shows_tool_names_as_the_cards_do() -> None:
+    """The block's header and each stacked call name the tool the model named, so
+    a control character in a name shows as a symbol there too."""
+    _child_approval_block(
+        r"""
+const ch = code => String.fromCharCode(code);
+const ESC = ch(27);
+const call = (id, name) => ({call_id: id, func_name: name, approval_label: name, needs_approval: true,
+  header: '', preview: ''});
+const items = [call('c1', 'first' + ESC + '[2K'), call('c2', 'second' + ESC + '[1A'), call('c3', 'third')];
+const block = renderApprovalBlock({ws_id: 'ws-1', name: 'child'}, {call_id: 'c1', items});
+const head = block.querySelector('.approval-tool').textContent;
+assert(head === 'first' + ch(0x241b) + '[2K + 2 more', 'the header shows the symbol and keeps its count: ' + JSON.stringify(head));
+const stacked = block.querySelectorAll('.approval-sub-item').map(sub => sub.querySelector('.approval-tool').textContent);
+assert(stacked[0] === 'second' + ch(0x241b) + '[1A', 'a stacked name shows the symbol: ' + JSON.stringify(stacked));
+assert(!text(block).includes(ESC), 'no raw escape in the block');
+const refused = call('c4', 'edit_file');
+refused.needs_approval = false;
+refused.error = 'Unknown tool: bad' + ESC + '[2K';
+const banner = renderApprovalBlock({ws_id: 'ws-1', name: 'child'}, {call_id: 'c4', items: [refused]})
+  .querySelector('.approval-policy-block').textContent;
+assert(banner.includes('bad' + ch(0x241b) + '[2K') && !banner.includes(ESC), 'a refusal shows treated: ' + JSON.stringify(banner));
+"""
+    )
+
+
+def test_coordinator_card_shows_error_and_tool_names_treated(tmp_path: Path) -> None:
+    _coordinator(
+        r"""
+const ch = code => String.fromCharCode(code);
+const ESC = ch(27), sym = ch(0x241b);
+receive({type: 'approve_request', cycle_id: 'cy1', items: [
+  {...item, call_id: 'e1', func_name: 'ws' + ESC + '[2K', approval_label: 'ws' + ESC + '[2K'},
+  {...item, call_id: 'e2', needs_approval: false, error: 'Unknown tool: bad' + ESC + '[2K'},
+]});
+flushFrames();
+const all = text(root);
+assert(!all.includes(ESC), 'no raw escape anywhere on the cards: ' + JSON.stringify(all));
+const pill = root.querySelector('.conv-row-status--error').textContent;
+assert(pill === '✗ Unknown tool: bad' + sym + '[2K', 'the error pill shows it treated: ' + JSON.stringify(pill));
+assert(rowFor('e1').dataset.toolName === 'ws' + ESC + '[2K', 'the identifier stays raw');
+assert(root.querySelector('.conv-batch').getAttribute('aria-label').includes('ws' + sym), 'the region is named treated');
+""",
+        tmp_path,
     )
 
 

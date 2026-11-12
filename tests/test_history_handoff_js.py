@@ -25,6 +25,7 @@ _SHARED_HANDOFF = _ROOT / "turnstone/shared_static/history_handoff.js"
 _QUEUE = _ROOT / "turnstone/shared_static/composer_queue.js"
 _TOOL_PROJECTION = _ROOT / "turnstone/shared_static/tool_projection.js"
 _ATTACHMENTS = _ROOT / "turnstone/shared_static/composer_attachments.js"
+_CONVERSATION = _ROOT / "turnstone/shared_static/conversation.js"
 _PY_SDK = _ROOT / "turnstone/sdk/server.py"
 _PY_CHANNEL = _ROOT / "turnstone/channels/_sse.py"
 _TS_SDK = _ROOT / "sdk/typescript/src/server.ts"
@@ -336,6 +337,7 @@ import {
 } from %(projection)s;
 globalThis.window = {};
 const { buildToolImages } = await import(%(attachments)s);
+const { convShownText } = await import(%(conversation)s);
 
 const wsId = "ws-tool-projection";
 
@@ -629,6 +631,7 @@ if (lateOutputs.length !== 1 || lateOutputs[0].output !== "orphan final")
             "handle": handle_event,
             "append_result": append_result,
             "attachments": json.dumps(_ATTACHMENTS.as_uri()),
+            "conversation": json.dumps(_CONVERSATION.as_uri()),
             "append_to_row": append_to_row,
             "append_batch": append_batch,
         },

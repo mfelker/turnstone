@@ -10,6 +10,7 @@ string-presence assertions that catch the silent one-line regression.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -1496,3 +1497,42 @@ console.log("reveal OK");
     )
     proc = run_node_source(script)
     assert proc.returncode == 0, f"reveal harness failed:\n{proc.stderr}\n{proc.stdout}"
+
+
+def test_approval_head_and_announcement_show_a_treated_tool_name() -> None:
+    """A model-written tool name reaches the approval head and the screen-reader
+    announcement as the cards show text: control characters as symbols, and
+    credentials redacted."""
+    body = _INTERACTIVE.read_text(encoding="utf-8")
+    functions = "\n".join(
+        _extract_braced(body, signature)
+        for signature in (
+            "function _toolAnnounceText(items) {",
+            "function _convApprovalHead(kickerText, items) {",
+        )
+    )
+    shared = (_ROOT / "turnstone/shared_static/conversation.js").as_uri()
+    script = (
+        FAKE_DOM
+        + f"""
+const {{ convShownText, buildConvBatchDisclosure }} = await import({json.dumps(shared)});
+"""
+        + functions
+        + r"""
+const assert = (c, m) => { if (!c) throw new Error(m); };
+const ESC = String.fromCharCode(27), sym = String.fromCharCode(0x241b);
+const key = "sk-" + "a".repeat(30);
+const items = [{func_name: "mcp__x" + ESC + "[2K", approval_label: "x"}, {func_name: "other"}];
+const head = _convApprovalHead("pending", items);
+const summary = head.children.find((el) => el.className === "conv-batch-summary").textContent;
+assert(summary === "mcp__x" + sym + "[2K + 1 more", "head shows the symbol: " + JSON.stringify(summary));
+const solo = _convApprovalHead("pending", [{func_name: "t" + key}]);
+const soloText = solo.children.find((el) => el.className === "conv-batch-summary").textContent;
+assert(!soloText.includes(key) && soloText.includes("[REDACTED:"), "head redacts: " + soloText);
+const said = _toolAnnounceText(items);
+assert(said.includes("mcp__x" + sym + "[2K") && !said.includes(ESC), "announcement shows the symbol: " + JSON.stringify(said));
+console.log("ok");
+"""
+    )
+    proc = run_node_source(script)
+    assert proc.returncode == 0, f"treated-name harness failed:\n{proc.stderr}\n{proc.stdout}"
