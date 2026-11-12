@@ -136,6 +136,9 @@ class _UsageHandoff:
 
 _MAX_PARALLEL_EVALUATIONS = 16
 _JUDGE_READ_LIMIT = 32_768
+# Extra characters read past the limit when redacting, so a credential (or a
+# whole PEM private-key block) that straddles the cut is seen and redacted whole.
+_JUDGE_REDACT_OVERSCAN = 8_192
 _JUDGE_DIRECTORY_LIMIT = 200
 
 # ---------------------------------------------------------------------------
@@ -1963,14 +1966,15 @@ class IntentJudge:
                     except (ValueError, TypeError, RecursionError):
                         tc_args = {}
 
-                    tool_result = self._exec_read_only_tool(tc_name, tc_args)
                     if self._config.redact_secrets:
-                        # Issue #1297 (prototype of the proposed fix): the
-                        # evidence the judge gathers itself gets the same
-                        # credential redaction as the session's tool output.
-                        from turnstone.core.output_guard import redact_credentials
-
-                        tool_result = redact_credentials(tool_result)
+                        # Issue #1297: the evidence the judge gathers itself
+                        # gets the same credential redaction as the session's
+                        # tool output, applied before the read is truncated.
+                        tool_result = self._exec_read_only_tool(
+                            tc_name, tc_args, redact=self._redact_evidence
+                        )
+                    else:
+                        tool_result = self._exec_read_only_tool(tc_name, tc_args)
                     judge_turns.append(Turn.tool(tc.get("id", ""), tool_result))
                 turn += 1
                 continue
@@ -2181,9 +2185,35 @@ class IntentJudge:
         """Return True if *path* resolves to a protected location."""
         return IntentJudge._is_resolved_path_blocked(path.resolve())
 
+    def _redact_evidence(self, text: str) -> str:
+        """Redact credentials the way the session redacts tool output (#1297).
+
+        Runs the output guard with the rule registry's patterns, so
+        admin-defined secret patterns apply to the judge's evidence too.
+        """
+        from turnstone.core.output_guard import evaluate_output
+
+        registry = self._rule_registry
+        assessment = evaluate_output(
+            text,
+            func_name="judge_evidence",
+            budget_seconds=self._config.output_guard_budget_seconds,
+            patterns=registry.output_patterns if registry is not None else None,
+        )
+        return assessment.sanitized if assessment.sanitized is not None else text
+
     @staticmethod
-    def _exec_read_only_tool(name: str, args: dict[str, Any]) -> str:
+    def _exec_read_only_tool(
+        name: str,
+        args: dict[str, Any],
+        *,
+        redact: Callable[[str], str] | None = None,
+    ) -> str:
         """Execute a read-only tool directly (no session pipeline).
+
+        *redact*, when given, scrubs credentials from the result.  For
+        ``read_file`` it runs before truncation, over a window that reaches
+        past the cut, so a secret straddling the limit is redacted whole.
 
         Returns the tool result as a string, or an error message.
         """
@@ -2198,14 +2228,30 @@ class IntentJudge:
                 # Bound acquisition itself, not merely the returned string:
                 # a parallel batch must not materialize one unbounded file per
                 # worker before applying the judge context cap.
+                window = _JUDGE_READ_LIMIT + (_JUDGE_REDACT_OVERSCAN if redact else 0)
                 with resolved_path.open("r", encoding="utf-8", errors="replace") as handle:
-                    content = handle.read(_JUDGE_READ_LIMIT + 1)
-                if len(content) > _JUDGE_READ_LIMIT:
+                    content = handle.read(window + 1)
+                truncated = len(content) > _JUDGE_READ_LIMIT
+                if redact is not None:
+                    if len(content) > window:
+                        # The file goes on past the window: drop its partial
+                        # last line, which may hold a credential cut short
+                        # enough to escape every pattern.  Only a cut past the
+                        # limit is safe; a single long line keeps the window.
+                        last_newline = content.rfind("\n", _JUDGE_READ_LIMIT)
+                        if last_newline != -1:
+                            content = content[: last_newline + 1]
+                    content = redact(content)
+                if truncated:
                     try:
                         total_bytes = resolved_path.stat().st_size
                         size_note = f", {total_bytes} bytes total"
                     except OSError:
                         size_note = ""
+                    if len(content) <= _JUDGE_READ_LIMIT:
+                        # Redaction shrank the text under the limit: it still
+                        # stops short of the file's end, so say it was cut.
+                        return f"{content}\n... (truncated{size_note})"
 
                     def _read_marker(_omitted: int, _original: int, _limit: int) -> str:
                         return f"\n... (truncated{size_note})"
@@ -2239,7 +2285,8 @@ class IntentJudge:
                     lines.append(f"  {entry.name}{suffix}")
                 if truncated:
                     lines.append("  ... (additional entries omitted)")
-                return "\n".join(lines) or "(empty directory)"
+                listing = "\n".join(lines) or "(empty directory)"
+                return redact(listing) if redact is not None else listing
 
             return f"Error: unknown tool: {name}"
         except Exception as exc:
