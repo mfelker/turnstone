@@ -637,13 +637,21 @@ assert(!lone.children.at(-1).textContent.includes('LONECUTOFFBODY'), 'nor when s
 const keyLine = (i) => 'KEYLINE' + String(i).padStart(2, '0') + 'A'.repeat(50) + '\n';
 let after = '';
 for (let i = 3; i < 25; i += 1) after += keyLine(i);
-const stops = '$ ls -la\n'.repeat(2000) + '-----BEGIN RSA PRIVATE KEY-----\n' + keyLine(0) + keyLine(1) + keyLine(2)
+const jwt = 'eyJ' + 'A'.repeat(3000) + '.' + 'eyJ' + 'B'.repeat(3000) + '.' + 'C'.repeat(40);
+const stops = '$ ls -la\n'.repeat(2000) + 'Authorization: Bearer ' + jwt + '\n' + '-----BEGIN RSA PRIVATE KEY-----\n' + keyLine(0) + keyLine(1) + keyLine(2)
   + '-- run stops here --\n' + after + '$ ls -la\n'.repeat(8000) + '-----BEGIN CERTIFICATE-----\nMIIC\n-----END CERTIFICATE-----\n';
 const stopped = conv.buildConvResult(stops, {});
 assert(stopped.children.at(-1).textContent.includes('truncated for display'), 'that result is cut');
 assert(!/KEYLINE\d\d/.test(stopped.children.at(-1).textContent), 'no key line shows after a run that stopped early');
 conv.convResultExpandControl(stopped).click();
 assert(!/KEYLINE\d\d/.test(stopped.children.at(-1).textContent), 'nor in show all');
+// A credential that straddles the BEGIN is redacted whole in the head, so the
+// head's stop point is where it and the prefix redacted alone part ways.
+const straddle = '{"password": "' + 'p'.repeat(2000) + '-----BEGIN RSA PRIVATE KEY-----"}\n$ ls -la\n' + after
+  + '$ ls -la\n'.repeat(11000) + '-----BEGIN CERTIFICATE-----\nMIIC\n-----END CERTIFICATE-----\n';
+const straddled = conv.buildConvResult(straddle, {});
+assert(straddled.children.at(-1).textContent.includes('truncated for display'), 'that result is cut');
+assert(!/KEYLINE\d\d/.test(straddled.children.at(-1).textContent), 'no key line shows after a straddled BEGIN');
 const plain = conv.buildConvResult('x'.repeat(70 * 1024), {}).children.at(-1).textContent;
 assert(plain.indexOf('\n…') === 64 * 1024, 'plain text past the cut keeps its whole head');
 """

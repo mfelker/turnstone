@@ -1396,7 +1396,13 @@ function _redactedHead(text) {
     safe = Math.max(0, head.length - REDACT_WINDOW);
     const open = privateKeyOpenIndex(win);
     if (open !== -1) {
-      safe = Math.min(safe, redactCredentials(win.slice(0, open)).length);
+      // The prefix redacted alone may differ from the head's own start (a
+      // credential that straddles the BEGIN is redacted whole in the head), so
+      // stop where the two part ways.
+      const prefix = redactCredentials(win.slice(0, open));
+      let same = 0;
+      while (same < prefix.length && same < head.length && prefix[same] === head[same]) same += 1;
+      safe = Math.min(safe, same);
     }
   }
   return _displayCut(head.slice(0, Math.min(RAW_CAP, safe)), text.length);

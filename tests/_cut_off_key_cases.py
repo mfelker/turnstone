@@ -115,6 +115,8 @@ NEGATIVE = [
     ("followed-by-example", BEGIN + "\nExample\n"),
     ("elided-body", BEGIN + "\nMIIEvQIBADANBg...\n"),
     ("example-on-begin-line", BEGIN + " (example)\n" + "\n".join(body(3)) + "\n"),
+    ("elided-long-line", BEGIN + "\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC...\n"),
+    ("prose-with-an-ellipsis", BEGIN + "\nTheConfigurationLoader... reads it"),
     ("example-with-dots", BEGIN + "\nExample ...\n"),
     ("text-after-the-begin-dashes", BEGIN + " x\n" + body(1)[0] + "\n"),
     ("setext-underline", BEGIN + "\n=====\n"),

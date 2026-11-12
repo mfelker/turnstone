@@ -39,7 +39,7 @@
 // shorter final line (a mid-line cap).  The run stops at the first line that
 // is not key-shaped and need not reach the end of the text; a BEGIN followed
 // by prose stays as written.  A line ends at a real or JSON-escaped newline,
-// a quote (lookahead, not consumed), the end of the text or a "..."
+// a quote (lookahead, not consumed), the end of the text or a "...["
 // truncation marker (blanks before it are kept).  A base64 character may also
 // be the JSON-escaped "\/".
 // Engine parity: output_guard.py builds the same pattern from the same
@@ -50,7 +50,7 @@ const _PRIVATE_KEY_LABEL = String.raw`(?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED|PGP)\s+
 const _PK_NL = String.raw`(?:\r?\n|(?:\\r)?\\n)`;
 const _PK_EOT = String.raw`(?![\s\S])`;
 const _PK_B64 = String.raw`(?:[A-Za-z0-9+/]|\\/)`;
-const _PK_LINE_END = String.raw`(?:[ \t]*(?=${_PK_NL}|${_PK_EOT}|["'])|(?=[ \t]*\.\.\.))`;
+const _PK_LINE_END = String.raw`(?:[ \t]*(?=${_PK_NL}|${_PK_EOT}|["'])|(?=[ \t]*\.\.\.[ \t]*\[))`;
 const _PK_HEADER = String.raw`${_PK_NL}[ \t]*[A-Za-z][A-Za-z0-9-]*:[^\r\n\\"']*`;
 const _PK_TAIL =
   String.raw`[ \t]*(?:${_PK_HEADER})*(?:${_PK_NL}[ \t]*)?` +
@@ -347,21 +347,8 @@ export function redactNamedValue(key, value) {
 }
 
 /**
- * Where the first private-key BEGIN line in `text` starts, or -1.  In text
- * redactCredentials has been over, one that remains is a block with neither
- * its END, another BEGIN nor a run of key-shaped lines after it (so not a
- * cut-off key), and it may run on past the text's end.
- *
- * @param {string} text - Text to search
- * @returns {number} The index of the BEGIN line, or -1
- */
-export function privateKeyBeginIndex(text) {
-  return String(text).search(_RE_PRIVATE_KEY_BEGIN);
-}
-
-/**
  * Where the first private-key BEGIN line in `text` starts that no END or later
- * BEGIN closes, or -1.  Unlike privateKeyBeginIndex this reads raw text, and a
+ * BEGIN closes, or -1.  This reads raw text, and a
  * cut-off key that redactCredentials would take by its key-shaped lines still
  * counts as open here: its run may go on past the end of the text.
  *
