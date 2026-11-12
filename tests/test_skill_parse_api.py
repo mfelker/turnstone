@@ -258,3 +258,20 @@ Body.
         )
         assert resp.status_code == 413
         assert "raw" in resp.json()["error"].lower()
+
+    def test_oversized_chunked_body_without_content_length_returns_413(
+        self, client: TestClient
+    ) -> None:
+        from turnstone.console.server import _PARSE_SKILL_MAX_BODY_BYTES
+
+        def chunks() -> Any:
+            for _ in range(0, _PARSE_SKILL_MAX_BODY_BYTES + 1, 4096):
+                yield b"x" * 4096
+
+        resp = client.post(
+            "/v1/api/admin/skills/parse",
+            content=chunks(),
+            headers={"Content-Type": "application/json"},
+        )
+        assert "content-length" not in resp.request.headers
+        assert resp.status_code == 413

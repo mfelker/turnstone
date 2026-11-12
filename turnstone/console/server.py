@@ -16468,7 +16468,15 @@ async def admin_effort_ladder(request: Request) -> JSONResponse:
 
     body = await read_json_or_400(request)
     if isinstance(body, JSONResponse):
-        return body
+        # An oversized body keeps its 413; the 400 texts are this route's own.
+        if body.status_code != 400:
+            return body
+        error = (
+            "body must be a JSON object"
+            if body.body == JSONResponse({"error": "Request body must be a JSON object"}).body
+            else "invalid JSON body"
+        )
+        return JSONResponse({"error": error}, status_code=400)
     provider = str(body.get("provider") or "").strip()
     model = str(body.get("model") or "").strip()
     capabilities = body.get("capabilities")

@@ -104,3 +104,27 @@ def test_requires_admin_models_permission() -> None:
     client.headers.update({"X-Test-Perms": "read"})
     resp = _post(client, {"provider": "openai", "model": "m"})
     assert resp.status_code in (401, 403)
+
+
+def test_a_bad_body_keeps_this_routes_own_400_texts() -> None:
+    client = _make_client()
+    bad = client.post(
+        "/v1/api/admin/models/effort-ladder",
+        content=b"{",
+        headers={"Content-Type": "application/json"},
+    )
+    assert (bad.status_code, bad.json()) == (400, {"error": "invalid JSON body"})
+    not_object = _post(client, [])
+    assert (not_object.status_code, not_object.json()) == (
+        400,
+        {"error": "body must be a JSON object"},
+    )
+
+
+def test_an_oversized_body_is_413() -> None:
+    resp = _make_client().post(
+        "/v1/api/admin/models/effort-ladder",
+        content=b'{"pad": "' + b"x" * (17 * 1024 * 1024) + b'"}',
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 413

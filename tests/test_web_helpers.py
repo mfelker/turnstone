@@ -487,7 +487,7 @@ class TestJsonBodyBudget:
         resp, pulled = await self._send(4 * self.CAP)
         assert resp.status_code == 413
         assert "content-length" not in resp.request.headers
-        assert pulled <= self.CAP + 2 * self.CHUNK, "the rest of the body is never read"
+        assert pulled <= self.CAP + self.CHUNK, "the rest of the body is never read"
 
     @pytest.mark.anyio
     async def test_an_oversized_content_length_reads_nothing(self) -> None:
@@ -569,6 +569,43 @@ class TestJsonBodyBudget:
             )
         assert ok.status_code == 200 and ok.json() == {"bytes": 100}
         assert big.status_code == 413
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("chunked", [True, False], ids=["chunked", "content-length"])
+    async def test_a_body_of_exactly_the_cap_parses(self, chunked: bool) -> None:
+        resp, _pulled = await self._send(self.CAP, chunked=chunked)
+        assert resp.status_code == 200
+        if not chunked:
+            assert resp.request.headers["content-length"] == str(self.CAP)
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("chunked", [True, False], ids=["chunked", "content-length"])
+    async def test_a_body_one_byte_over_the_cap_is_413(self, chunked: bool) -> None:
+        resp, _pulled = await self._send(self.CAP + 1, chunked=chunked)
+        assert resp.status_code == 413
+
+    @pytest.mark.anyio
+    async def test_a_client_that_disconnects_mid_body_is_400(self) -> None:
+        from turnstone.core.web_helpers import read_json_or_400
+
+        messages = [
+            {"type": "http.request", "body": b'{"pad": "', "more_body": True},
+            {"type": "http.disconnect"},
+        ]
+
+        async def receive() -> Any:
+            return messages.pop(0)
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/json",
+            "headers": [(b"content-type", b"application/json")],
+        }
+        from starlette.requests import Request as _Request
+
+        got = await read_json_or_400(_Request(scope, receive), max_bytes=self.CAP)
+        assert got.status_code == 400
 
 
 class TestBodiesNestedTooDeeply:

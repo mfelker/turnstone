@@ -1720,6 +1720,11 @@ _TTS_TEXT_CAP = 8000  # characters per synthesis request
 # JSON body cap for the TTS route: 12 bytes is the worst-case ensure_ascii escape per
 # character (one non-BMP character as two six-byte surrogate escapes), plus headroom
 # for the other fields.
+#
+# The text cap is checked on the stripped text, but the byte cap counts the whole
+# body: text within the cap padded with enough heavily escaped leading or trailing
+# whitespace can pass the first and still get a 413.  Any finite byte cap allows
+# this, and it takes a contrived request to hit it.
 _TTS_BODY_MAX_BYTES = 12 * _TTS_TEXT_CAP + 4096
 
 # How many clips a node synthesizes at once, each on a thread of its own.
@@ -4981,6 +4986,9 @@ def internal_model_status(request: Request) -> JSONResponse:
     return JSONResponse({"models": models})
 
 
+_NOT_AN_OBJECT_BODY = JSONResponse({"error": "Request body must be a JSON object"}).body
+
+
 async def internal_model_auth_cache_invalidate(request: Request) -> JSONResponse:
     """Evict one user's delegated model-token memo from this node.
 
@@ -4997,6 +5005,10 @@ async def internal_model_auth_cache_invalidate(request: Request) -> JSONResponse
 
     body = await read_json_or_400(request)
     if isinstance(body, JSONResponse):
+        # An oversized body keeps its 413; a body that is valid JSON but not an
+        # object has always answered "Invalid user_id" here.
+        if body.status_code == 400 and body.body == _NOT_AN_OBJECT_BODY:
+            return JSONResponse({"error": "Invalid user_id"}, status_code=400)
         return body
     user_id = body.get("user_id")
     if (

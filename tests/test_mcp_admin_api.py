@@ -4361,6 +4361,36 @@ class TestInternalModelAuthCacheInvalidateEndpoint:
         assert response.status_code == 403
         app.state.model_token_client.invalidate_model_mint_memo_sync.assert_not_called()
 
+    def _invalidate_client(self) -> TestClient:
+        app = Starlette(
+            routes=_routes_with_internal(),
+            middleware=[Middleware(_InjectServiceAuthMiddleware)],
+        )
+        app.state.model_token_client = MagicMock()
+        return TestClient(app, raise_server_exceptions=False)
+
+    @pytest.mark.parametrize(
+        ("content", "error"),
+        [(b"{", "Invalid JSON body"), (b"[]", "Invalid user_id"), (b"null", "Invalid user_id")],
+    )
+    def test_a_bad_body_keeps_its_original_400_text(self, content: bytes, error: str) -> None:
+        response = self._invalidate_client().post(
+            "/v1/api/_internal/model-auth-cache-invalidate",
+            content=content,
+            headers={"Content-Type": "application/json"},
+        )
+        assert (response.status_code, response.json()) == (400, {"error": error})
+
+    def test_an_oversized_body_is_413(self) -> None:
+        client = self._invalidate_client()
+        response = client.post(
+            "/v1/api/_internal/model-auth-cache-invalidate",
+            content=b'{"user_id": "' + b"x" * (17 * 1024 * 1024) + b'"}',
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 413
+        client.app.state.model_token_client.invalidate_model_mint_memo_sync.assert_not_called()
+
     @pytest.mark.parametrize("body", [{}, {"user_id": ""}, {"user_id": "bad\nid"}])
     def test_invalid_user_id_is_rejected(self, body: dict[str, str]) -> None:
         app = Starlette(

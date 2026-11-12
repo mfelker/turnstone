@@ -10,6 +10,16 @@ All development now integrates on `main`. Supported release lines are maintained
 on `stable/X.Y` branches; `stable/1.8` preserves the former stable branch.
 The separate `dev` branch is retired. See [the release process](docs/releasing.md).
 
+## [2026-11-12]
+
+### Security
+
+- **Oversized request bodies are refused with a 413 instead of being read
+  whole into memory.** JSON endpoints now stop reading at 16 MiB, the login and
+  setup endpoints at 64 KiB, and the text-to-speech endpoint at a size just above
+  its text limit. The console applies caps to the bodies it buffers before
+  forwarding them to a node, including chunked bodies that declare no length.
+
 ## [2026-11-11]
 
 ### Fixed
