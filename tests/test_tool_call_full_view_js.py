@@ -393,6 +393,10 @@ for (const gap of [1, 2, 3, 4, 5, 6, 7]) {
 }
 const whole = headOf('a'.repeat(CAP - 8) + RLO + 'b'.repeat(40));
 assert(whole === 'a'.repeat(CAP - 8) + '⟨U+202E⟩', 'a marker that ends at the cap stays whole');
+// Look-alike text inside the last 7 characters, but not ending the head, is no
+// partial marker: the cut stays at the cap.
+const lookalike = 'a'.repeat(CAP - 6) + '\u27e8Uxyz' + 'b'.repeat(40);
+assert(headOf(lookalike) === lookalike.slice(0, CAP), 'a look-alike inside the head is not backed off');
 const plain = headOf('a'.repeat(CAP + 500));
 assert(plain === 'a'.repeat(CAP), 'text without markers is cut at the cap');
 
