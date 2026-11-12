@@ -105,6 +105,10 @@ def skill_summary_rows(storage: Any) -> list[dict[str, Any]]:
 
 DEFAULT_JSON_BODY_MAX_BYTES = 16 * 1024 * 1024
 
+# The 400 text for a body that is valid JSON but not an object.  Routes that keep
+# their own wording for this case compare the helper's error against this.
+JSON_NOT_AN_OBJECT_ERROR = "Request body must be a JSON object"
+
 
 async def read_body_within(request: Request, max_bytes: int) -> bytes | JSONResponse:
     """Read a whole request body, refusing one larger than *max_bytes*.
@@ -187,7 +191,7 @@ async def read_json_or_400(
             # Valid JSON, wrong shape (list/string/number at top level):
             # without this check the declared dict type is a lie and every
             # caller's first ``body.get`` raises into a 500.
-            return _JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+            return _JSONResponse({"error": JSON_NOT_AN_OBJECT_ERROR}, status_code=400)
         body: dict[str, Any] = raw
         return body
     except (ValueError, json.JSONDecodeError, RecursionError):

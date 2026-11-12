@@ -16466,14 +16466,18 @@ async def admin_effort_ladder(request: Request) -> JSONResponse:
     if err:
         return err
 
+    from turnstone.core.web_helpers import JSON_NOT_AN_OBJECT_ERROR
+
     body = await read_json_or_400(request)
     if isinstance(body, JSONResponse):
         # An oversized body keeps its 413; the 400 texts are this route's own.
+        # Differs from the old inline parse in one corner: the helper's rare 500
+        # ("Failed to read request body") passes through here.
         if body.status_code != 400:
             return body
         error = (
             "body must be a JSON object"
-            if body.body == JSONResponse({"error": "Request body must be a JSON object"}).body
+            if json.loads(bytes(body.body)).get("error") == JSON_NOT_AN_OBJECT_ERROR
             else "invalid JSON body"
         )
         return JSONResponse({"error": error}, status_code=400)

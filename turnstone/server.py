@@ -4986,9 +4986,6 @@ def internal_model_status(request: Request) -> JSONResponse:
     return JSONResponse({"models": models})
 
 
-_NOT_AN_OBJECT_BODY = JSONResponse({"error": "Request body must be a JSON object"}).body
-
-
 async def internal_model_auth_cache_invalidate(request: Request) -> JSONResponse:
     """Evict one user's delegated model-token memo from this node.
 
@@ -5001,13 +4998,18 @@ async def internal_model_auth_cache_invalidate(request: Request) -> JSONResponse
     if auth_result is None or not auth_result.has_scope("service"):
         return JSONResponse({"error": "Service scope required"}, status_code=403)
 
-    from turnstone.core.web_helpers import read_json_or_400
+    from turnstone.core.web_helpers import JSON_NOT_AN_OBJECT_ERROR, read_json_or_400
 
     body = await read_json_or_400(request)
     if isinstance(body, JSONResponse):
         # An oversized body keeps its 413; a body that is valid JSON but not an
-        # object has always answered "Invalid user_id" here.
-        if body.status_code == 400 and body.body == _NOT_AN_OBJECT_BODY:
+        # object has always answered "Invalid user_id" here.  Differs from the
+        # old inline parse in one corner: a client that disconnects mid-body now
+        # gets the helper's "Request body interrupted before completion" (400).
+        if (
+            body.status_code == 400
+            and json.loads(bytes(body.body)).get("error") == JSON_NOT_AN_OBJECT_ERROR
+        ):
             return JSONResponse({"error": "Invalid user_id"}, status_code=400)
         return body
     user_id = body.get("user_id")
