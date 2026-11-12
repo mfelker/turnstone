@@ -317,6 +317,60 @@ assert(summary.querySelector('.conv-row-args').textContent === '⚙ bash: true '
     )
 
 
+def test_bidi_controls_show_as_code_points() -> None:
+    """Bidirectional controls (#1556) reorder what the operator reads, so they
+    show as <U+XXXX> markers on every card surface and in the full call,
+    nested keys included; Hebrew itself passes through untouched."""
+    _builders(
+        r"""
+const ch = code => String.fromCharCode(code);
+const mark = code => '⟨U+' + code.toString(16).toUpperCase().padStart(4, '0') + '⟩';
+const RLO = ch(0x202e), LRI = ch(0x2066), PDI = ch(0x2069), RLM = ch(0x200f);
+const hidden = 'echo ' + RLO + 'txt.exe' + LRI + 'x' + PDI + RLM + ' done';
+const seen = 'echo ' + mark(0x202e) + 'txt.exe' + mark(0x2066) + 'x' + mark(0x2069) + mark(0x200f) + ' done';
+
+const cmdOf = item => {
+  const holder = document.createElement('div');
+  holder.appendChild(conv.buildConvCmd(item));
+  const diff = holder.querySelector('.conv-row-diff');
+  return [text(holder.querySelector('.conv-row-cmd')), diff ? text(diff) : null];
+};
+const [cmd, diff] = cmdOf({func_name: 'bash', header: '⚙ bash: ' + hidden, preview: '    echo one\n    ' + hidden});
+assert(cmd === '$ ' + seen, 'the command line shows them: ' + JSON.stringify(cmd));
+assert(diff === '    echo one\n    ' + seen, 'so does the preview: ' + JSON.stringify(diff));
+const summary = conv.buildConvRow({func_name: 'bash', call_id: 'z'}, {argsText: '⚙ bash: ' + hidden});
+const argsLine = summary.querySelector('.conv-row-args').textContent;
+assert(argsLine === '⚙ bash: ' + seen, 'and the call-line summary: ' + JSON.stringify(argsLine));
+
+const shown = args(open(row('bash', JSON.stringify({command: hidden, ['na' + RLM + 'me']: 'v'}))));
+assert(shown[0][1] === seen, 'and the full-call value: ' + JSON.stringify(shown[0][1]));
+assert(shown[1][0] === 'na' + mark(0x200f) + 'me', 'a top-level key shows one: ' + JSON.stringify(shown[1][0]));
+
+const nested = args(open(row('bash', JSON.stringify({auth: {['us' + RLO + 'er']: 'x'}}))));
+assert(nested[0][1].includes('us' + mark(0x202e) + 'er'), 'a nested key shows one: ' + JSON.stringify(nested[0][1]));
+assert(!nested[0][1].includes(RLO), 'with no raw override left');
+
+const hebrew = 'echo "שלום"';
+assert(cmdOf({func_name: 'bash', header: '⚙ bash: ' + hebrew, preview: ''})[0] === '$ ' + hebrew, 'Hebrew passes through');
+assert(args(open(row('bash', JSON.stringify({command: hebrew}))))[0][1] === hebrew, 'in the full call too');
+
+const all = [0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069];
+for (const code of all) {
+  const raw = ch(code), want = mark(code);
+  const surfaces = [
+    cmdOf({func_name: 'bash', header: '⚙ bash: a' + raw + 'b', preview: '    a' + raw + 'b'}).join('|'),
+    conv.buildConvRow({func_name: 'bash', call_id: 'z'}, {argsText: 'a' + raw + 'b'}).querySelector('.conv-row-args').textContent,
+    JSON.stringify(args(open(row('bash', JSON.stringify({command: 'a' + raw + 'b', ['k' + raw]: {['n' + raw]: 1}}))))),
+  ];
+  for (const s of surfaces) {
+    assert(!s.includes(raw), 'no raw U+' + code.toString(16) + ' survives: ' + JSON.stringify(s));
+    assert(s.includes(want), 'U+' + code.toString(16) + ' shows as a marker: ' + JSON.stringify(s));
+  }
+}
+"""
+    )
+
+
 def _child_approval_block(scenario: str) -> None:
     """Run *scenario* with the coordinator's children-tree approval block: its
     real renderers, beside the shared builders they import."""
@@ -429,6 +483,25 @@ block = blockFor([refused]);
 const banner = block.querySelector('.approval-policy-block').textContent;
 assert(!banner.includes(key) && !banner.includes(ESC) && banner.includes(ch(0x241b) + '[2J'),
   'the policy banner is redacted and shows its controls: ' + JSON.stringify(banner));
+"""
+    )
+
+
+def test_child_approval_block_shows_bidi_controls() -> None:
+    """A bidi override in a pending call's header shows as a marker in the
+    approval block's preview and its aria-label, and nowhere raw."""
+    _child_approval_block(
+        r"""
+const RLO = String.fromCharCode(0x202e);
+const item = {call_id: 'c1', func_name: 'bash', approval_label: 'bash', needs_approval: true,
+  header: '⚙ bash: echo ' + RLO + 'txt.exe', preview: ''};
+const block = renderApprovalBlock({ws_id: 'ws-1', name: 'child'}, {call_id: 'c1', items: [item]});
+const preview = block.querySelectorAll('.approval-preview');
+assert(preview.length === 1 && preview[0].textContent.includes('⟨U+202E⟩txt.exe'),
+  'the preview shows the marker: ' + preview.map(describe));
+const label = block.getAttribute('aria-label');
+assert(label.includes('⟨U+202E⟩') && !label.includes(RLO), 'so does the aria-label: ' + JSON.stringify(label));
+assert(!text(block).includes(RLO), 'and the raw character appears nowhere in the block');
 """
     )
 

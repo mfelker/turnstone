@@ -35,15 +35,27 @@ export function stripAnsi(s) {
 // could otherwise hide what follows it from the reader while a shell still
 // runs it.  Each becomes its Control Pictures symbol (ESC shows as U+241B);
 // line feed and tab stay as they are.  Tool output goes through stripAnsi.
-// The terminal client's show_controls (turnstone/ui/colors.py) shows the same
-// symbols, C1 controls as well, which some terminals act on, and lone
-// surrogates as U+FFFD, as a browser shows them anyway.
+// The 12 bidirectional controls (#1556: ALM, LRM, RLM, the embeddings and
+// overrides U+202A-202E, the isolates U+2066-2069) would reorder what the
+// operator reads, so each shows as its code point, as in <U+202E> (with U+27E8
+// and U+27E9 as the brackets).  The terminal client's show_controls
+// (turnstone/ui/colors.py) shows C0 and DEL as the same symbols, C1 controls as
+// well, which some terminals act on, and lone surrogates as U+FFFD, as a
+// browser shows them anyway; it does not mark bidi controls, so "the same
+// symbols as the terminal" holds only for C0 and DEL.
 function _showControls(text) {
   return text.replace(
     // eslint-disable-next-line no-control-regex
-    /[\x00-\x08\x0b-\x1f\x7f]/g,
-    (c) =>
-      String.fromCharCode(c === "\x7f" ? 0x2421 : 0x2400 + c.charCodeAt(0)),
+    /[\x00-\x08\x0b-\x1f\x7f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
+    (c) => {
+      const code = c.charCodeAt(0);
+      if (code > 0x7f) {
+        return (
+          "\u27e8U+" + code.toString(16).toUpperCase().padStart(4, "0") + "\u27e9"
+        );
+      }
+      return String.fromCharCode(c === "\x7f" ? 0x2421 : 0x2400 + code);
+    },
   );
 }
 
@@ -1711,7 +1723,9 @@ function _fullCallEntries(raw) {
     const state = { redacted: false };
     const shown = _redactArguments(value, key, state);
     const text =
-      typeof shown === "string" ? shown : JSON.stringify(shown, null, 2);
+      typeof shown === "string"
+        ? shown
+        : _showControls(JSON.stringify(shown, null, 2));
     return { key, text, redacted: state.redacted };
   };
   let parsed;
