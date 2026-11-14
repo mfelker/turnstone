@@ -39,10 +39,10 @@
 // shorter final line (a mid-line cap).  The run stops at the first line that
 // is not key-shaped and need not reach the end of the text; a BEGIN followed
 // by prose stays as written.  A line ends at a real or JSON-escaped newline,
-// a quote (lookahead, not consumed), the end of the text or a "..." cut
-// (before a line break, a quote, the end of the text or "["; blanks before
-// it are kept).  A base64 character may also
-// be the JSON-escaped "\/".
+// a plain or JSON-escaped quote (lookahead, not consumed), the end of the
+// text or a cut of three or more dots or "…" followed by a line break, a
+// quote, the end of the text or "[" (blanks around the cut are kept).  A
+// base64 character may also be the JSON-escaped "\/".
 // Engine parity: output_guard.py builds the same pattern from the same
 // fragments.  Both use only syntax the two engines read alike: (?![\s\S]) for
 // the end of text (never $, \Z or \A), [ \t] rather than \s in the new parts,
@@ -52,8 +52,8 @@ const _PK_NL = String.raw`(?:\r?\n|(?:\\r)?\\n)`;
 const _PK_EOT = String.raw`(?![\s\S])`;
 const _PK_B64 = String.raw`(?:[A-Za-z0-9+/]|\\/)`;
 const _PK_LINE_END =
-  String.raw`(?:[ \t]*(?=${_PK_NL}|${_PK_EOT}|["'])` +
-  String.raw`|(?=[ \t]*\.\.\.(?:[ \t]*\[|${_PK_NL}|${_PK_EOT}|["'])))`;
+  String.raw`(?:[ \t]*(?=${_PK_NL}|${_PK_EOT}|\\?["'])` +
+  String.raw`|(?=[ \t]*(?:\.{3,}|…)[ \t]*(?:\[|${_PK_NL}|${_PK_EOT}|\\?["'])))`;
 const _PK_HEADER = String.raw`${_PK_NL}[ \t]*[A-Za-z][A-Za-z0-9-]*:[^\r\n\\"']*`;
 const _PK_TAIL =
   String.raw`[ \t]*(?:${_PK_HEADER})*(?:${_PK_NL}[ \t]*)?` +

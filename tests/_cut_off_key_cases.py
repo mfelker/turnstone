@@ -128,6 +128,51 @@ POSITIVE = [
     ),
     ("blanks-after-the-begin-line", BEGIN + " \t\n" + body(1)[0] + "\n", MARK + "\n"),
     ("trailing-padding", BEGIN + "\n" + "\n".join(body(2)) + "==\n", MARK + "\n"),
+    (
+        "plain-dots-then-blanks-then-text",
+        BEGIN + "\n" + body(1)[0] + "\n" + body(1, 40)[0] + "...   \n$ ls",
+        MARK + "...   \n$ ls",
+    ),
+    (
+        "plain-dots-then-blank-at-end-of-text",
+        BEGIN + "\n" + body(1)[0] + "\n" + body(1, 40)[0] + "...\t",
+        MARK + "...\t",
+    ),
+    (
+        "four-dots",
+        BEGIN + "\n" + body(1)[0] + "\n" + body(1, 40)[0] + "....\n$ ls",
+        MARK + "....\n$ ls",
+    ),
+    (
+        "ellipsis-character",
+        BEGIN + "\n" + body(1)[0] + "\n" + body(1, 40)[0] + "…\n$ ls",
+        MARK + "…\n$ ls",
+    ),
+    (
+        "ellipsis-character-on-first-line",
+        BEGIN + "\n" + body(1, 48)[0] + "…\n",
+        MARK + "…\n",
+    ),
+    (
+        "plain-dots-then-json-newline",
+        '{"s": "' + BEGIN + "\\n" + body(1)[0] + "\\n" + body(1, 40)[0] + '...\\nnext"}',
+        '{"s": "' + MARK + '...\\nnext"}',
+    ),
+    (
+        "plain-dots-in-single-quotes",
+        "'" + BEGIN + "\n" + body(1)[0] + "\n" + body(1, 40)[0] + "...'",
+        "'" + MARK + "...'",
+    ),
+    (
+        "json-escaped-quote-after-line",
+        '{"s": "' + BEGIN + "\\n" + body(1)[0] + "\\n" + body(1, 23)[0] + '\\" more"}',
+        '{"s": "' + MARK + '\\" more"}',
+    ),
+    (
+        "json-escaped-quote-after-dots",
+        '{"s": "' + BEGIN + "\\n" + body(1)[0] + "\\n" + body(1, 40)[0] + '...\\" more"}',
+        '{"s": "' + MARK + '...\\" more"}',
+    ),
 ]
 
 # Text that must come back unchanged.
